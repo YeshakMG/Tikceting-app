@@ -1,0 +1,20 @@
+{
+  "buildFiles": [
+    "C:\\flutter\\src\\flutter\\packages\\flutter_tools\\gradle\\src\\main\\groovy\\CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "C:\\Users\\hp\\AppData\\Local\\Android\\sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+      "-C",
+      "C:\\Users\\hp\\Desktop\\AI office doc\\Oromia Transport Projects\\oro_ticket_mobile app for employee\\Oro_Tikcet_management\\oro_ticket_app\\android\\app\\.cxx\\Debug\\6x581s5a\\x86_64",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "C:\\Users\\hp\\AppData\\Local\\Android\\sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+    "-C",
+    "C:\\Users\\hp\\Desktop\\AI office doc\\Oromia Transport Projects\\oro_ticket_mobile app for employee\\Oro_Tikcet_management\\oro_ticket_app\\android\\app\\.cxx\\Debug\\6x581s5a\\x86_64",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {}
+}

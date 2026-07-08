@@ -1,0 +1,2 @@
+C:/Users/hp/Desktop/AI office doc/Oromia Transport Projects/oro_ticket_mobile app for employee/Oro_Tikcet_management/oro_ticket_app/android/app/.cxx/Debug/6x581s5a/arm64-v8a/CMakeFiles/edit_cache.dir
+C:/Users/hp/Desktop/AI office doc/Oromia Transport Projects/oro_ticket_mobile app for employee/Oro_Tikcet_management/oro_ticket_app/android/app/.cxx/Debug/6x581s5a/arm64-v8a/CMakeFiles/rebuild_cache.dir

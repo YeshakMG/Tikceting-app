@@ -179,7 +179,7 @@ class TicketController extends GetxController {
     calculateCharges(0.0);
   }
 
-  void calculateCharges(double baseTariff) async {
+  void calculateCharges(double tariffAmount) async {
     final box = await HiveBoxes.getBox<CommissionRuleModel>(
         HiveBoxes.commissionRulesBox);
     final rule = box.values.firstOrNull;
@@ -226,8 +226,8 @@ class TicketController extends GetxController {
       roadTypeBreakdown.clear();
 
       // Fallback calculation
-      double computedService = baseTariff * rate;
-      double total = baseTariff + computedService;
+      final computedService = tariffAmount * rate;
+      final total = tariffAmount + computedService;
       serviceCharge.value = "${computedService.toStringAsFixed(2)} ETB";
       totalPayment.value = "${total.toStringAsFixed(2)} ETB";
     }

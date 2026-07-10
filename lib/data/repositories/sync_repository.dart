@@ -69,6 +69,14 @@ class SyncRepository {
           print('number of vehicle stored in local: ${localVehicles.length}');
           print('${vehicle.toJson()}');
         }
+
+        final hasMissingTariffs = localVehicles.any(_isTariffDataMissing);
+        if (hasMissingTariffs && await _isOnline) {
+          print('♻️ Local vehicle tariff details are incomplete. Refreshing from API...');
+          await syncAllCompanyUserVehicles();
+          return getLocalVehicles();
+        }
+
         return localVehicles;
       }
 
@@ -84,6 +92,35 @@ class SyncRepository {
       print('⚠️ Error in getVehicles(), falling back to local: $e');
       return getLocalVehicles(); // Always fall back to local
     }
+  }
+
+  bool _isTariffDataMissing(VehicleModel vehicle) {
+    final tariffs = vehicle.tariffs;
+    if (tariffs == null || tariffs.isEmpty) {
+      return true;
+    }
+
+    for (final entry in tariffs) {
+      final raw = entry.trim();
+      if (!raw.startsWith('{') || !raw.endsWith('}')) {
+        continue;
+      }
+
+      try {
+        final parsed = jsonDecode(raw);
+        if (parsed is Map<String, dynamic>) {
+          final hasRate = parsed['price_per_km'] != null || parsed['tariff'] != null;
+          final hasRoadType = parsed['road_type'] != null;
+          if (hasRate && hasRoadType) {
+            return false;
+          }
+        }
+      } catch (_) {
+        // ignore malformed entries and continue checking others
+      }
+    }
+
+    return true;
   }
 
   Future<void> syncAllCompanyUserVehicles({bool forceSync = false}) async {
@@ -114,15 +151,21 @@ class SyncRepository {
 
       while (hasMorePages) {
         print('🔄 Fetching vehicles page $currentPage...');
+        final requestUrl =
+            '$baseUrl/tms-api/vehicles/test?page=$currentPage&limit=50';
+        print('🌐 Vehicle API Request URL: $requestUrl');
 
         final response = await _secureClient.get(
-          Uri.parse(
-              '$baseUrl/vehicles/company-user/my-vehicles?page=$currentPage'),
+          Uri.parse(requestUrl),
           headers: {
             'Authorization': 'Bearer $token',
             'Accept': 'application/json',
           },
         ).timeout(const Duration(seconds: 30));
+
+        print('📥 Vehicle API Status: ${response.statusCode}');
+        print('📋 Vehicle API Headers: ${response.headers}');
+        _logResponsePreview(response.body);
 
         if (response.statusCode == 200) {
           final json = jsonDecode(response.body);
@@ -139,6 +182,10 @@ class SyncRepository {
               .where((e) => e['deleted_at'] == null)
               .map((e) => VehicleModel.fromJson(e))
               .toList();
+
+          for (var i = 0; i < validVehicles.length; i++) {
+            _logVehicleDetails(validVehicles[i], index: i + 1, page: currentPage);
+          }
 
           // Save vehicles
           for (final vehicle in validVehicles) {
@@ -283,6 +330,78 @@ class SyncRepository {
 
   List<ArrivalTerminalModel> getLocalArrivalTerminals() {
     return ArrivalTerminalStorageService.getTerminals();
+  }
+
+  void _logVehicleDetails(
+    VehicleModel vehicle, {
+    required int index,
+    required int page,
+  }) {
+    final route = vehicle.currentRoute;
+    final terminalDestination = route?.terminalDestination;
+
+    print('🚗 Vehicle #$index (page $page)');
+    print('   id: ${vehicle.id}');
+    print('   plate_number: ${vehicle.plateNumber}');
+    print('   plate_region: ${vehicle.plateRegion}');
+    print('   fleetType: ${vehicle.fleetType.isEmpty ? 'empty' : vehicle.fleetType}');
+    print('   fleetTypeId: ${vehicle.fleetTypeId ?? 'null'}');
+    print('   vehicleLevel: ${vehicle.vehicleLevel.isEmpty ? 'empty' : vehicle.vehicleLevel}');
+    print('   vehicleLevelId: ${vehicle.vehicleLevelId ?? 'null'}');
+    print('   association: ${vehicle.associationName.isEmpty ? 'empty' : vehicle.associationName}');
+    print('   seat_capacity: ${vehicle.seatCapacity}');
+    print('   status: ${vehicle.status}');
+    print('   assigned_terminal_id: ${vehicle.assignedTerminalId ?? 'null'}');
+    print('   created_at: ${vehicle.createdAt ?? 'null'}');
+    print('   updated_at: ${vehicle.updatedAt ?? 'null'}');
+    print('   arrival_terminals: ${vehicle.arrivalTerminals ?? []}');
+    print('   tariffs: ${vehicle.tariffs ?? []}');
+
+    if (route == null) {
+      print('   vehicleTerminalDestinations: []');
+      return;
+    }
+
+    print('   vehicleTerminalDestinations: [');
+    print('     id: ${route.id}');
+    print('     vehicle_id: ${route.vehicleId}');
+    print('     terminal_destination_id: ${route.terminalDestinationId}');
+    print('     assigned_at: ${route.assignedAt?.toIso8601String() ?? 'null'}');
+    print('     unassigned_at: ${route.unassignedAt?.toIso8601String() ?? 'null'}');
+    print('     is_on_temporary: ${route.isOnTemporary}');
+
+    if (terminalDestination == null) {
+      print('     terminalDestination: null');
+      print('   ]');
+      return;
+    }
+
+    print('     terminalDestination: {');
+    print('       id: ${terminalDestination.id}');
+    print('       departure_terminal_id: ${terminalDestination.departureTerminalId}');
+    print('       arrival_terminal_id: ${terminalDestination.arrivalTerminalId}');
+    print('       distance: ${terminalDestination.distance}');
+    print('       road_type: ${terminalDestination.roadType}');
+    print('       departureTerminal: {name: ${terminalDestination.departureTerminalName ?? 'null'}}');
+    print('       arrivalTerminal: {name: ${terminalDestination.arrivalTerminalName ?? 'null'}}');
+    print('     }');
+    print('   ]');
+  }
+
+  void _logResponsePreview(String body, {int maxChars = 1200}) {
+    if (body.isEmpty) {
+      print('📄 Vehicle API Body: <empty>');
+      return;
+    }
+
+    if (body.length <= maxChars) {
+      print('📄 Vehicle API Body: $body');
+      return;
+    }
+
+    print('📄 Vehicle API Body (truncated to $maxChars chars):');
+    print(body.substring(0, maxChars));
+    print('... <truncated ${body.length - maxChars} chars>');
   }
 
 // For Departure

@@ -36,11 +36,30 @@ class VehicleRoute extends HiveObject {
   });
 
   factory VehicleRoute.fromJson(Map<String, dynamic> json) {
+    dynamic pick(List<String> keys) {
+      for (final key in keys) {
+        if (json.containsKey(key) && json[key] != null) {
+          return json[key];
+        }
+      }
+      return null;
+    }
+
+    String readString(List<String> keys, {String fallback = ''}) {
+      final value = pick(keys);
+      if (value == null) return fallback;
+      final text = value.toString().trim();
+      return text.isEmpty ? fallback : text;
+    }
+
     TerminalDestination? td;
 
     // Support different shapes: either nested under 'terminalDestination' or the map itself
-    if (json['terminalDestination'] != null && json['terminalDestination'] is Map) {
-      td = TerminalDestination.fromJson(Map<String, dynamic>.from(json['terminalDestination']));
+    final nestedTerminalDestination = pick(['terminalDestination', 'terminal_destination']);
+    if (nestedTerminalDestination != null && nestedTerminalDestination is Map) {
+      td = TerminalDestination.fromJson(
+        Map<String, dynamic>.from(nestedTerminalDestination),
+      );
     } else if (json.containsKey('arrival_terminal_id') || json.containsKey('departure_terminal_id')) {
       // The json itself looks like a TerminalDestination
       try {
@@ -53,16 +72,19 @@ class VehicleRoute extends HiveObject {
     }
 
     return VehicleRoute(
-      id: json['id']?.toString() ?? '',
-      vehicleId: json['vehicle_id']?.toString() ?? '',
-      terminalDestinationId: json['terminal_destination_id']?.toString() ?? '',
-      assignedAt: json['assigned_at'] != null
-          ? DateTime.tryParse(json['assigned_at'].toString())
+      id: readString(['id', 'route_id']),
+      vehicleId: readString(['vehicle_id', 'vehicleId']),
+      terminalDestinationId: readString([
+        'terminal_destination_id',
+        'terminalDestinationId',
+      ]),
+      assignedAt: pick(['assigned_at', 'assignedAt']) != null
+          ? DateTime.tryParse(pick(['assigned_at', 'assignedAt']).toString())
           : null,
-      unassignedAt: json['unassigned_at'] != null
-          ? DateTime.tryParse(json['unassigned_at'].toString())
+      unassignedAt: pick(['unassigned_at', 'unassignedAt']) != null
+          ? DateTime.tryParse(pick(['unassigned_at', 'unassignedAt']).toString())
           : null,
-      isOnTemporary: json['is_on_temporary'] ?? false,
+      isOnTemporary: (pick(['is_on_temporary', 'isOnTemporary']) as bool?) ?? false,
       terminalDestination: td,
     );
   }

@@ -97,7 +97,20 @@ class TicketPrinter {
       if (line.trim().isEmpty) {
         await _printer.printNewLine();
       } else {
-        await _printer.printCustom(line, 1, 0);
+        final isBoldLine = line.contains('<B>') && line.contains('</B>');
+        final printableLine = line.replaceAll('<B>', '').replaceAll('</B>', '');
+
+        if (isBoldLine) {
+          // ESC E 1 => bold on
+          await _printer.writeBytes(Uint8List.fromList([27, 69, 1]));
+        }
+
+        await _printer.printCustom(printableLine, 1, 0);
+
+        if (isBoldLine) {
+          // ESC E 0 => bold off
+          await _printer.writeBytes(Uint8List.fromList([27, 69, 0]));
+        }
       }
     }
   }

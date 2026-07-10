@@ -39,25 +39,96 @@ class TerminalDestination extends HiveObject {
   });
 
   factory TerminalDestination.fromJson(Map<String, dynamic> json) {
+    dynamic pick(List<String> keys) {
+      for (final key in keys) {
+        if (json.containsKey(key) && json[key] != null) {
+          return json[key];
+        }
+      }
+      return null;
+    }
+
+    String readString(List<String> keys, {String fallback = ''}) {
+      final value = pick(keys);
+      if (value == null) return fallback;
+      final text = value.toString().trim();
+      return text.isEmpty ? fallback : text;
+    }
+
+    double parseNum(dynamic value) {
+      if (value == null) return 0.0;
+      if (value is num) return value.toDouble();
+      return double.tryParse(value.toString()) ?? 0.0;
+    }
+
+    Map<String, double>? parseDistanceMap(dynamic value) {
+      if (value == null || value is! Map) return null;
+
+      final parsed = <String, double>{};
+      value.forEach((key, raw) {
+        if (raw is Map) {
+          final nested = raw['distance'] ?? raw['value'] ?? raw['km'];
+          parsed[key.toString()] = parseNum(nested);
+        } else {
+          parsed[key.toString()] = parseNum(raw);
+        }
+      });
+
+      return parsed.isEmpty ? null : parsed;
+    }
+
     // Parse road distances if present
     Map<String, double>? roadDistances;
-    if (json['road_distances'] != null) {
+    final rawRoadDistances = pick(['road_distances', 'roadDistances']);
+    if (rawRoadDistances != null && rawRoadDistances is Map) {
       roadDistances = {};
-      final distances = json['road_distances'] as Map<String, dynamic>;
+      final distances = Map<String, dynamic>.from(rawRoadDistances);
       distances.forEach((key, value) {
-        roadDistances![key] = (value as num).toDouble();
+        if (value is Map) {
+          final nested = value['distance'] ?? value['value'] ?? value['km'];
+          roadDistances![key] = parseNum(nested);
+        } else {
+          roadDistances![key] = parseNum(value);
+        }
       });
     }
 
+    // Some APIs send distance as an object (e.g. by road type).
+    roadDistances ??= parseDistanceMap(pick(['distance', 'total_distance', 'totalDistance']));
+
+    final totalDistance = roadDistances != null
+        ? roadDistances.values.fold<double>(0.0, (sum, d) => sum + d)
+      : parseNum(pick(['distance', 'total_distance', 'totalDistance']));
+
+    String parsedRoadType;
+    if (roadDistances != null && roadDistances.isNotEmpty) {
+      parsedRoadType = roadDistances.length > 1
+          ? 'hybrid'
+          : roadDistances.keys.first.toString();
+    } else {
+      parsedRoadType = readString(['road_type', 'roadType'], fallback: 'asphalt');
+    }
+
+    final departureTerminalRaw = pick(['departureTerminal', 'departure_terminal']);
+    final arrivalTerminalRaw = pick(['arrivalTerminal', 'arrival_terminal']);
+
+    final departureTerminalName = departureTerminalRaw is Map
+        ? (departureTerminalRaw['name'] ?? departureTerminalRaw['terminal_name'])?.toString()
+        : readString(['departure_terminal_name', 'departureTerminalName'], fallback: '');
+
+    final arrivalTerminalName = arrivalTerminalRaw is Map
+        ? (arrivalTerminalRaw['name'] ?? arrivalTerminalRaw['terminal_name'])?.toString()
+        : readString(['arrival_terminal_name', 'arrivalTerminalName'], fallback: '');
+
     return TerminalDestination(
-      id: json['id']?.toString() ?? '',
-      departureTerminalId: json['departure_terminal_id']?.toString() ?? '',
-      arrivalTerminalId: json['arrival_terminal_id']?.toString() ?? '',
-      distance: double.tryParse(json['distance'].toString()) ?? 0.0,
-      roadType: json['road_type'] ?? 'asphalt',
+      id: readString(['id', 'terminal_destination_id', 'terminalDestinationId']),
+      departureTerminalId: readString(['departure_terminal_id', 'departureTerminalId']),
+      arrivalTerminalId: readString(['arrival_terminal_id', 'arrivalTerminalId']),
+      distance: totalDistance,
+      roadType: parsedRoadType,
       roadDistances: roadDistances,
-      departureTerminalName: json['departureTerminal']?['name']?.toString(),
-      arrivalTerminalName: json['arrivalTerminal']?['name']?.toString(),
+      departureTerminalName: departureTerminalName,
+      arrivalTerminalName: arrivalTerminalName,
     );
   }
 

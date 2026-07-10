@@ -32,7 +32,7 @@ class TicketPrinter {
         await _printText(texts[i]);
 
         if (passengerQRDatas != null && passengerQRDatas.length > i && passengerQRDatas[i].isNotEmpty) {
-          await _printer.printQRcode(passengerQRDatas[i], 180, 180, 1);
+          await _printer.printQRcode(passengerQRDatas[i], 110, 110, 1);
           await _printer.printNewLine();
         }
         await _printer.printNewLine();

@@ -592,14 +592,17 @@ class SyncRepository {
         final trip = entry.value;
 
         try {
-          final response = await _secureClient.post(
+          final payload = _sanitizePayloadForServer('trip', trip.toJson());
+      print('📦 Sending trip payload: ${jsonEncode(payload)}');
+
+      final response = await _secureClient.post(
             Uri.parse('$baseUrl/trips'),
             headers: {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
               'Authorization': 'Bearer $token',
             },
-            body: jsonEncode(trip.toJson()),
+            body: jsonEncode(payload),
           );
 
           if (response.statusCode == 200 || response.statusCode == 201) {
@@ -649,14 +652,17 @@ class SyncRepository {
       final serviceCharge = entry.value;
 
       try {
-        final response = await _secureClient.post(
+        final payload = _sanitizePayloadForServer('service_charge', serviceCharge.toJson());
+      print('📦 Sending service-charge payload: ${jsonEncode(payload)}');
+
+      final response = await _secureClient.post(
           Uri.parse("$baseUrl/service-charges"), // 👈 replace with real URL
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
             'Authorization': 'Bearer $token',
           },
-          body: jsonEncode(serviceCharge.toJson()),
+          body: jsonEncode(payload),
         );
 
           if (response.statusCode == 200 || response.statusCode == 201) {
@@ -672,6 +678,18 @@ class SyncRepository {
          }
        }
     }
+  }
+
+  Map<String, dynamic> _sanitizePayloadForServer(
+    String type,
+    Map<String, dynamic> data,
+  ) {
+    final payload = Map<String, dynamic>.from(data);
+    if (type != 'trip' && type != 'service_charge') {
+      payload.remove('transaction_id');
+      payload.remove('transactionId');
+    }
+    return payload;
   }
 
   Future<void> syncTariffs() async {

@@ -12,24 +12,6 @@ class SignInView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Show error snackbar when loginError changes
-    ever(controller.loginError, (error) {
-      if (error.isNotEmpty) {
-        Get.snackbar(
-          'Login Error',
-          error,
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: AppColors.error,
-          colorText: AppColors.titleAlt,
-          duration: const Duration(seconds: 4),
-          margin: const EdgeInsets.all(10),
-          borderRadius: 8,
-        );
-        // Clear the error after showing snackbar
-        controller.loginError.value = '';
-      }
-    });
-
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(

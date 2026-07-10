@@ -1,9 +1,12 @@
 import 'package:hive/hive.dart';
+import 'package:uuid/uuid.dart';
 
 part 'trip_model.g.dart';
 
 @HiveType(typeId: 5)
 class TripModel extends HiveObject {
+  static const Uuid _uuid = Uuid();
+
   @HiveField(0)
   String vehicleId;
 
@@ -60,8 +63,11 @@ class TripModel extends HiveObject {
     required this.departureName,
     required this.arrivalName,
     this.isSynced = false,
-    this.transactionId = '',
-  });
+    String? transactionId,
+  }) : transactionId =
+            (transactionId != null && transactionId.trim().isNotEmpty)
+                ? transactionId
+                : _uuid.v4();
 
   Map<String, dynamic> toJson() {
     return {

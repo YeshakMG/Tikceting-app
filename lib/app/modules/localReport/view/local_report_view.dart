@@ -204,15 +204,6 @@ class LocalReportView extends StatelessWidget {
           ),
         ],
       ),
-      actions: [
-        IconButton(
-          icon: const Icon(
-            Icons.download,
-            color: AppColors.background,
-          ),
-          onPressed: () => controller.generatePDFReport(),
-        ),
-      ],
     );
   }
 }

@@ -8,11 +8,13 @@ import 'package:oro_ticket_app/data/locals/hive_boxes.dart';
 import 'package:oro_ticket_app/data/locals/models/user_model.dart';
 import 'package:oro_ticket_app/app/modules/sign_in/services/auth_service.dart';
 import 'package:oro_ticket_app/data/repositories/sync_repository.dart';
+import 'package:uuid/uuid.dart';
 
 // Fix the import for Ethiopian datetime
 import 'package:ethiopian_datetime/ethiopian_datetime.dart';
 
 class HomeController extends GetxController {
+  static const Uuid _uuid = Uuid();
   final Rx<UserModel?> user = Rx<UserModel?>(null);
   final RxString companyName = ''.obs;
   final RxString companyId = ''.obs;
@@ -120,6 +122,9 @@ class HomeController extends GetxController {
           employeeId: existingEntry.employeeId,
           companyId: existingEntry.companyId,
           employeeName: user.value?.fullName ?? '',
+          transactionId: existingEntry.transactionId.isNotEmpty
+              ? existingEntry.transactionId
+              : _uuid.v4(),
         );
 
         await box.put(key, updatedEntry);
@@ -134,6 +139,7 @@ class HomeController extends GetxController {
           employeeId: currentUserId,
           companyId: user.value?.companyId ?? "Unknown",
           employeeName: user.value?.fullName ?? '',
+          transactionId: _uuid.v4(),
         );
 
         await box.add(newEntry);
@@ -188,14 +194,12 @@ class HomeController extends GetxController {
 
   void resetDashboard() async {
     serviceChargeToday.value = 0.0;
+    serviceChargeText.value = '';
 
-    // Clear all service charge data from local storage
     try {
-      final box = Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
-      await box.clear();
-      print('✅ Service charge data cleared from local storage');
+      print('ℹ️ Dashboard reset requested; preserving local service-charge records');
     } catch (e) {
-      print('❌ Error clearing service charge data: $e');
+      print('❌ Error resetting dashboard summary: $e');
     }
   }
 

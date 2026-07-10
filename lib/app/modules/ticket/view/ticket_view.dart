@@ -13,28 +13,19 @@ import 'package:oro_ticket_app/data/locals/models/vehicle_model.dart';
 import 'package:oro_ticket_app/data/locals/models/departure_terminal_model.dart';
 import 'package:oro_ticket_app/data/locals/models/arrival_terminal_model.dart';
 import 'package:oro_ticket_app/data/locals/models/vehicle_print_lock_model.dart';
-import 'package:oro_ticket_app/data/locals/service/tariff_calculator_service.dart';
 import 'package:oro_ticket_app/data/locals/service/tariff_storage_service.dart';
 import 'package:oro_ticket_app/data/repositories/enhanced_sync_repository.dart';
 import 'package:oro_ticket_app/data/repositories/sync_repository.dart';
 import 'package:oro_ticket_app/widgets/app_scafold.dart';
-import 'package:oro_ticket_app/widgets/ticket_widget.dart';
-import 'package:pdf/pdf.dart';
 import '../controller/ticket_controller.dart';
 import 'package:ethiopian_datetime/ethiopian_datetime.dart';
 import 'package:oro_ticket_app/data/locals/models/service_charge_model.dart';
 import 'package:oro_ticket_app/data/locals/hive_boxes.dart';
-import 'package:qr_flutter/qr_flutter.dart';
-import 'dart:typed_data';
-import 'package:printing/printing.dart';
-import 'package:pdf/widgets.dart' as pw;
 import 'package:hive/hive.dart';
-import 'package:oro_ticket_app/data/locals/models/commission_rule_model.dart';
-import 'package:oro_ticket_app/data/locals/models/trip_model.dart';
 import 'package:intl/intl.dart';
 import 'package:oro_ticket_app/app/modules/utils/ticket_printer.dart';
-import 'package:blue_thermal_printer/blue_thermal_printer.dart';
 import 'package:vs_scrollbar/vs_scrollbar.dart';
+import 'package:uuid/uuid.dart';
 
 class TicketView extends StatefulWidget {
   @override
@@ -42,6 +33,7 @@ class TicketView extends StatefulWidget {
 }
 
 class _TicketViewState extends State<TicketView> {
+  static const Uuid _uuid = Uuid();
   final _ticketController = Get.put(TicketController());
   final homeController = Get.put(HomeController());
   static const Duration vehicleLockDuration = Duration(hours: 1, minutes: 30);
@@ -239,8 +231,8 @@ class _TicketViewState extends State<TicketView> {
           final departureTerminalId = _ticketController.departureTerminalId.value;
           final arrivalTerminalId = _ticketController.arrivalTerminalId.value;
 
-          final routeDep = route.departureTerminalId?.toString() ?? '';
-          final routeArr = route.arrivalTerminalId?.toString() ?? '';
+          final routeDep = route.departureTerminalId.toString();
+          final routeArr = route.arrivalTerminalId.toString();
 
           bool matchesForward = routeDep == departureTerminalId && routeArr == arrivalTerminalId;
           bool matchesBackward = routeDep == arrivalTerminalId && routeArr == departureTerminalId;
@@ -315,14 +307,10 @@ class _TicketViewState extends State<TicketView> {
   @override
   Widget build(BuildContext context) {
     return AppScaffold(
-      title: "Ticket",
+      title: "Print Ticket",
       userName: "Employee Name",
       currentBottomNavIndex: 1,
       showBottomNavBar: true,
-      actions: const [
-        Icon(Icons.more_horiz, color: Colors.white),
-        SizedBox(width: 16),
-      ],
       body: SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -1255,17 +1243,16 @@ Call: 8556
                 final exitQRData = _prepareExitQRData(tripData);
 
                 final printer = TicketPrinter();
-                final copies = int.tryParse(_ticketController.seatNo.value) ?? 1;
+                final copies = 1; // Test mode: print one ticket only
 
-                print('🖨️ Attempting to print $copies copies...');
+                print('🖨️ Attempting to print $copies copy for test...');
 
-                // Build individual ticket texts with seat numbers 1, 2, 3, etc.
-                final ticketTexts = <String>[];
-                final passengerQRDatas = <String>[];
-                for (int i = 1; i <= copies; i++) {
-                  ticketTexts.add(_prepareTicketTextForSeat(tripData, i));
-                  passengerQRDatas.add(_preparePassengerQRDataForSeat(tripData, i));
-                }
+                final ticketTexts = <String>[
+                  _prepareTicketTextForSeat(tripData, 1),
+                ];
+                final passengerQRDatas = <String>[
+                  _preparePassengerQRDataForSeat(tripData, 1),
+                ];
 
                 final printResult = await printer.connectAndPrintVerified(
                   texts: ticketTexts,
@@ -1287,9 +1274,16 @@ Call: 8556
                       parseSafe(_ticketController.serviceCharge.value) *
                           seatCount;
 
-                  final transactionId = _buildTransactionId();
-                final tripData = _prepareTripData(transactionId);
-                final serviceCharge = ServiceChargeModel(
+                  print('💾 Saving trip data:');
+                  print('   transactionId: $transactionId');
+                  print('   vehicleId: ${tripData.vehicleId}');
+                  print('   departure: ${tripData.departureName}');
+                  print('   arrival: ${tripData.arrivalName}');
+                  print('   totalPaid: ${tripData.totalPaid}');
+                  print('   trip payload ready for save/post:');
+                  print('   ${tripData.toJson()}');
+
+                  final serviceCharge = ServiceChargeModel(
                     departureTerminal: tripData.departureTerminalId,
                     dateTime: now,
                     serviceChargeAmount: totalServiceCharge,
@@ -1298,6 +1292,14 @@ Call: 8556
                     employeeId: tripData.employeeId,
                     transactionId: transactionId,
                   );
+
+                  print('💵 Saving service charge data:');
+                  print('   transactionId: ${serviceCharge.transactionId}');
+                  print('   departureTerminal: ${serviceCharge.departureTerminal}');
+                  print('   amount: ${serviceCharge.serviceChargeAmount}');
+                  print('   employeeId: ${serviceCharge.employeeId}');
+                  print('   service charge payload ready for save/post:');
+                  print('   ${serviceCharge.toJson()}');
 
                   final enhancedSyncRepo = EnhancedSyncRepository();
                   final syncResult = await enhancedSyncRepo.saveDataWithSync(
@@ -1398,52 +1400,7 @@ Call: 8556
   }
 
   String _buildTransactionId() {
-    final now = DateTime.now();
-    final userId = homeController.user.value?.id ?? 'unknown';
-    return 'tx_${now.microsecondsSinceEpoch}_$userId';
-  }
-
-  Future<void> _saveTripData(TripModel trip) async {
-    final tripBox = Hive.box<TripModel>(HiveBoxes.tripBox);
-    final serviceChargeBox =
-        Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
-
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-
-    double parseSafe(String value) =>
-        double.tryParse(value.split(' ').first) ?? 0.0;
-
-    final int seatCount = int.tryParse(_ticketController.seatNo.value) ?? 1;
-    final double totalServiceCharge =
-        parseSafe(_ticketController.serviceCharge.value) * seatCount;
-
-    // Save trip
-    await tripBox.add(trip);
-
-    // Save service charge
-    final existingEntry = serviceChargeBox.values.firstWhereOrNull((entry) {
-      final entryDate = DateTime(
-          entry.dateTime.year, entry.dateTime.month, entry.dateTime.day);
-      return entry.departureTerminal == trip.departureTerminalId &&
-          entry.employeeId == trip.employeeId &&
-          entryDate == today;
-    });
-
-    if (existingEntry != null) {
-      existingEntry.serviceChargeAmount += totalServiceCharge;
-      await existingEntry.save();
-    } else {
-      final newCharge = ServiceChargeModel(
-        departureTerminal: trip.departureTerminalId,
-        dateTime: now,
-        serviceChargeAmount: totalServiceCharge,
-        employeeName: homeController.user.value!.fullName,
-        companyId: trip.companyId,
-        employeeId: trip.employeeId,
-      );
-      await serviceChargeBox.add(newCharge);
-    }
+    return _uuid.v4();
   }
 
   String _prepareTicketTextForSeat(TripModel trip, int seatNumber) {
@@ -1556,84 +1513,6 @@ Call: 8556
     );
   }
 
-  Widget _buildRoadTypeBreakdown(Map<String, double> breakdown) {
-    return Container(
-      margin: EdgeInsets.only(top: 12, bottom: 8),
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade50,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(Icons.alt_route, size: 16, color: AppColors.primary),
-              SizedBox(width: 8),
-              Text(
-                'Route Breakdown:',
-                style: AppTextStyles.caption.copyWith(
-                  color: Colors.grey.shade700,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 8),
-          ...breakdown.entries.map((entry) {
-            String displayName = entry.key == 'asphalt'
-                ? 'Asphalt Road'
-                : entry.key == 'mud_road'
-                    ? 'Mud Road'
-                    : entry.key.replaceAll('_', ' ').capitalize!;
-
-            return Padding(
-              padding: const EdgeInsets.only(left: 24, top: 4),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    displayName,
-                    style: AppTextStyles.caption.copyWith(
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                  Text(
-                    '${entry.value.toStringAsFixed(2)} ETB',
-                    style: AppTextStyles.caption.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: Colors.black87,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }),
-          Divider(height: 16),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Total Base Tariff:',
-                style: AppTextStyles.caption.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              Text(
-                _ticketController.tariff.value,
-                style: AppTextStyles.caption.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.primary,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 String formatTicketText({
@@ -1664,9 +1543,6 @@ String formatTicketText({
   final dateStr = "${ethDate.day}-${ethDate.month}-${ethDate.year}";
   final timeStr =
       "${ethDate.hour.toString().padLeft(2, '0')}:${ethDate.minute.toString().padLeft(2, '0')} $period ";
-
-  // Calculate individual seat prices
-  final pricePerSeat = totalPayment / int.parse(seatNo);
 
   return '''
 Oromia Transport Agency

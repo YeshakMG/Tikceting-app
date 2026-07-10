@@ -16,6 +16,7 @@ import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:uuid/uuid.dart';
 
 enum SyncResult {
   postedToServer,   // Successfully posted live during print (no Hive entry)
@@ -23,7 +24,31 @@ enum SyncResult {
   partialSuccess,   // One posted, one failed (will retry the failed one)
 }
 
+enum SyncFailureReason {
+  none,
+  connection,
+  server,
+  unexpected,
+}
+
+class SyncRequestResult {
+  final bool success;
+  final SyncFailureReason reason;
+  final int? statusCode;
+
+  const SyncRequestResult._({required this.success, this.reason = SyncFailureReason.none, this.statusCode});
+
+  factory SyncRequestResult.success() => const SyncRequestResult._(success: true);
+
+  factory SyncRequestResult.failure({
+    required SyncFailureReason reason,
+    int? statusCode,
+  }) => SyncRequestResult._(success: false, reason: reason, statusCode: statusCode);
+}
+
 class EnhancedSyncRepository {
+  static const Uuid _uuid = Uuid();
+
   final String baseUrl = dotenv.env['API_BASE_URL'] ?? '';
   final ConnectivityService _connectivityService =
       Get.find<ConnectivityService>();
@@ -78,11 +103,11 @@ class EnhancedSyncRepository {
 
     for (final item in pendingItems) {
       try {
-        final success = item.type == 'trip'
+        final result = item.type == 'trip'
             ? await _syncTrip(item.data)
             : await _syncServiceCharge(item.data);
 
-        if (success) {
+        if (result.success) {
           await _syncQueueService.removeFromQueue(item.id);
 
           // If we have the original Hive key stored, delete the trip from main storage
@@ -120,25 +145,106 @@ class EnhancedSyncRepository {
     }
   }
 
-  Future<Map<String, dynamic>> _withAppVersion(Map<String, dynamic> data) async {
-    final appVersion = await _getAppVersion();
+  static Map<String, dynamic> sanitizePayloadForServer(
+    String type,
+    Map<String, dynamic> data,
+  ) {
     final payload = Map<String, dynamic>.from(data);
-    payload['version'] = payload['version'] ?? appVersion;
-    payload['app_version'] = payload['app_version'] ?? payload['version'];
+    if (type != 'trip' && type != 'service_charge') {
+      payload.remove('transaction_id');
+      payload.remove('transactionId');
+    }
     return payload;
   }
 
-  Future<bool> _syncTrip(Map<String, dynamic> tripData) async {
+  static bool shouldKeepLocalData({
+    required bool tripSuccess,
+    required bool chargeSuccess,
+  }) {
+    return !(tripSuccess && chargeSuccess);
+  }
+
+  Future<Map<String, dynamic>> _buildPayloadForSync(
+    String type,
+    Map<String, dynamic> data,
+  ) async {
+    final payload = await _withAppVersion(data);
+    return sanitizePayloadForServer(type, payload);
+  }
+
+  Future<Map<String, dynamic>> _withAppVersion(Map<String, dynamic> data) async {
+    final appVersion = await _getAppVersion();
+    final payload = Map<String, dynamic>.from(data);
+    payload['app_version'] = payload['app_version'] ?? appVersion;
+    return payload;
+  }
+
+  void _showSyncFailureMessage({
+    required SyncFailureReason reason,
+    int? statusCode,
+  }) {
+    String message;
+    switch (reason) {
+      case SyncFailureReason.connection:
+        message = 'Connection problem. Please check your internet connection and try again.';
+        break;
+      case SyncFailureReason.server:
+        message = statusCode != null
+            ? 'Server error ($statusCode). Please try again shortly.'
+            : 'Server error. Please try again shortly.';
+        break;
+      case SyncFailureReason.unexpected:
+      case SyncFailureReason.none:
+        message = 'Something went wrong while syncing. Please try again.';
+        break;
+    }
+
+    try {
+      if (Get.context != null) {
+        ScaffoldMessenger.of(Get.context!).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+      } else {
+        Get.snackbar(
+          'Sync failed',
+          message,
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.red,
+          colorText: Colors.white,
+        );
+      }
+    } catch (_) {}
+  }
+
+  SyncFailureReason _pickFailureReason(List<SyncRequestResult> results) {
+    if (results.any((result) => result.reason == SyncFailureReason.connection)) {
+      return SyncFailureReason.connection;
+    }
+    if (results.any((result) => result.reason == SyncFailureReason.server)) {
+      return SyncFailureReason.server;
+    }
+    if (results.any((result) => result.reason == SyncFailureReason.unexpected)) {
+      return SyncFailureReason.unexpected;
+    }
+    return SyncFailureReason.none;
+  }
+
+  Future<SyncRequestResult> _syncTrip(Map<String, dynamic> tripData) async {
     try {
       final authService = Get.find<AuthService>();
       final token = await authService.getToken();
 
       if (token == null) {
         print('❌ No auth token available');
-        return false;
+        return SyncRequestResult.failure(reason: SyncFailureReason.connection);
       }
 
-      final payload = await _withAppVersion(tripData);
+      final payload = await _buildPayloadForSync('trip', tripData);
+      print('📦 Sending trip payload: ${jsonEncode(payload)}');
 
       final response = await http
           .post(
@@ -153,8 +259,14 @@ class EnhancedSyncRepository {
           .timeout(const Duration(seconds: 10));
 
       final ok = response.statusCode == 200 || response.statusCode == 201;
-      if (!ok) print('❌ Server rejected trip ${response.statusCode}');
-      return ok;
+      if (!ok) {
+        print('❌ Server rejected trip ${response.statusCode}');
+        return SyncRequestResult.failure(
+          reason: SyncFailureReason.server,
+          statusCode: response.statusCode,
+        );
+      }
+      return SyncRequestResult.success();
     } catch (e) {
       final err = e.toString();
       if (err.contains('HandshakeException') || err.contains('CERTIFICATE_VERIFY_FAILED')) {
@@ -162,22 +274,23 @@ class EnhancedSyncRepository {
       } else {
         print('❌ Trip sync error: $e');
       }
-      return false;
+      return SyncRequestResult.failure(reason: SyncFailureReason.unexpected);
     }
   }
 
   // Sync a single service charge to server
-  Future<bool> _syncServiceCharge(Map<String, dynamic> chargeData) async {
+  Future<SyncRequestResult> _syncServiceCharge(Map<String, dynamic> chargeData) async {
     try {
       final authService = Get.find<AuthService>();
       final token = await authService.getToken();
 
       if (token == null) {
         print('❌ No auth token available');
-        return false;
+        return SyncRequestResult.failure(reason: SyncFailureReason.connection);
       }
 
-      final payload = await _withAppVersion(chargeData);
+      final payload = await _buildPayloadForSync('service_charge', chargeData);
+      print('📦 Sending service-charge payload: ${jsonEncode(payload)}');
 
       final response = await http
           .post(
@@ -194,21 +307,12 @@ class EnhancedSyncRepository {
       final ok = response.statusCode == 200 || response.statusCode == 201;
       if (!ok) {
         print('❌ Server rejected service-charge ${response.statusCode}');
-        // Show user-facing error if app UI is available
-        try {
-          if (Get.context != null) {
-            final msg = 'Failed to sync service charge (${response.statusCode})';
-            ScaffoldMessenger.of(Get.context!).showSnackBar(
-              SnackBar(
-                content: Text(msg),
-                backgroundColor: Colors.red,
-                duration: Duration(seconds: 4),
-              ),
-            );
-          }
-        } catch (_) {}
+        return SyncRequestResult.failure(
+          reason: SyncFailureReason.server,
+          statusCode: response.statusCode,
+        );
       }
-      return ok;
+      return SyncRequestResult.success();
     } catch (e) {
       final err = e.toString();
       if (err.contains('HandshakeException') || err.contains('CERTIFICATE_VERIFY_FAILED')) {
@@ -238,7 +342,7 @@ class EnhancedSyncRepository {
            }
          } catch (_) {}
        }
-      return false;
+      return SyncRequestResult.failure(reason: SyncFailureReason.unexpected);
     }
   }
 
@@ -263,8 +367,8 @@ class EnhancedSyncRepository {
     print('   - Found ${unsyncedTrips.length} unsynced trips in storage → posting to server...');
 
     for (final trip in unsyncedTrips) {
-      final success = await _syncTrip(trip.toJson());
-      if (success) {
+      final result = await _syncTrip(trip.toJson());
+      if (result.success) {
         // Successful server sync — do not keep in local Hive
         await trip.delete();
         print('   ✅ Trip posted from storage and removed from Hive: ${trip.vehicleId}');
@@ -292,8 +396,8 @@ class EnhancedSyncRepository {
     print('   - Found ${pendingCharges.length} pending service charges in storage → posting to server...');
 
     for (final charge in pendingCharges) {
-      final success = await _syncServiceCharge(charge.toJson());
-      if (success) {
+      final result = await _syncServiceCharge(charge.toJson());
+      if (result.success) {
         // Remove the successfully posted service charge
         final keys = chargeBox.keys.toList();
         for (final key in keys) {
@@ -316,16 +420,23 @@ class EnhancedSyncRepository {
     required TripModel trip,
     required ServiceChargeModel serviceCharge,
   }) async {
+    _ensureTransactionIds(trip: trip, serviceCharge: serviceCharge);
+
     final liveResult = await Connectivity().checkConnectivity();
     final isOnlineNow = liveResult != ConnectivityResult.none;
 
     if (isOnlineNow) {
       print('🌐 [PRINT] Online — attempting direct post to server');
 
-      final tripPayload = await _withAppVersion(trip.toJson());
-      final chargePayload = await _withAppVersion(serviceCharge.toJson());
-      final tripSuccess = await _syncTrip(tripPayload);
-      final chargeSuccess = await _syncServiceCharge(chargePayload);
+      final tripPayload = await _buildPayloadForSync('trip', trip.toJson());
+      final chargePayload = await _buildPayloadForSync(
+        'service_charge',
+        serviceCharge.toJson(),
+      );
+      final tripResult = await _syncTrip(tripPayload);
+      final chargeResult = await _syncServiceCharge(chargePayload);
+      final tripSuccess = tripResult.success;
+      final chargeSuccess = chargeResult.success;
 
       if (tripSuccess && chargeSuccess) {
         await _removeExistingTripFromHive(trip);
@@ -335,7 +446,9 @@ class EnhancedSyncRepository {
         return SyncResult.postedToServer;
       }
 
-      print('⚠️ [PRINT] Partial server post (trip:$tripSuccess, charge:$chargeSuccess) — saving failed items once');
+      final failureReason = _pickFailureReason([tripResult, chargeResult]);
+      print('⚠️ [PRINT] Partial server post (trip:$tripSuccess, charge:$chargeSuccess) — keeping local records until both succeed');
+      _showSyncFailureMessage(reason: failureReason);
 
       if (!tripSuccess) {
         await _saveTripToHiveIfNeeded(trip);
@@ -346,18 +459,45 @@ class EnhancedSyncRepository {
         await _queueForRetry('service_charge', chargePayload);
       }
 
+      await BackupService.backupData();
       return SyncResult.partialSuccess;
     }
 
     print('📴 [PRINT] No internet — saving to Hive once for later sync');
+    _showSyncFailureMessage(reason: SyncFailureReason.connection);
     await _saveTripToHiveIfNeeded(trip);
     await _saveServiceChargeToHiveIfNeeded(serviceCharge, trip);
     await BackupService.backupData();
 
-    await _queueForRetry('trip', await _withAppVersion(trip.toJson()));
-    await _queueForRetry('service_charge', await _withAppVersion(serviceCharge.toJson()));
+    await _queueForRetry('trip', await _buildPayloadForSync('trip', trip.toJson()));
+    await _queueForRetry(
+      'service_charge',
+      await _buildPayloadForSync('service_charge', serviceCharge.toJson()),
+    );
 
     return SyncResult.savedOffline;
+  }
+
+  void _ensureTransactionIds({
+    required TripModel trip,
+    required ServiceChargeModel serviceCharge,
+  }) {
+    if (trip.transactionId.trim().isEmpty &&
+        serviceCharge.transactionId.trim().isEmpty) {
+      final sharedId = _uuid.v4();
+      trip.transactionId = sharedId;
+      serviceCharge.transactionId = sharedId;
+      return;
+    }
+
+    if (trip.transactionId.trim().isEmpty) {
+      trip.transactionId = serviceCharge.transactionId;
+      return;
+    }
+
+    if (serviceCharge.transactionId.trim().isEmpty) {
+      serviceCharge.transactionId = trip.transactionId;
+    }
   }
 
   Future<void> _queueForRetry(String type, Map<String, dynamic> data) async {

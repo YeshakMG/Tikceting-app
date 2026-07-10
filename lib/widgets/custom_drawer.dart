@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:oro_ticket_app/core/constants/colors.dart';
 import 'package:oro_ticket_app/core/constants/drawer_items.dart';
 import 'package:oro_ticket_app/core/constants/typography.dart';
@@ -17,6 +18,11 @@ class CustomDrawer extends StatelessWidget {
     required this.companyName,
     this.onItemSelected,
   });
+
+  Future<String> getAppVersion() async {
+    final packageInfo = await PackageInfo.fromPlatform();
+    return packageInfo.version;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -62,14 +68,22 @@ class CustomDrawer extends StatelessWidget {
                       color: Colors.grey[400],
                     ),
                     textAlign: TextAlign.center,
-                  ),  
+                  ),
                   const SizedBox(height: 4),
-                  Text(
-                    'Version 1.0.4',
-                    style: AppTextStyles.caption.copyWith(
-                      fontSize: 10,
-                      color: Colors.grey[400],
-                    ),
+                  FutureBuilder<String>(
+                    future: getAppVersion(),
+                    builder: (context, snapshot) {
+                      final versionText = snapshot.hasData
+                          ? 'Version ${snapshot.data}'
+                          : 'Version';
+                      return Text(
+                        versionText,
+                        style: AppTextStyles.caption.copyWith(
+                          fontSize: 10,
+                          color: Colors.grey[400],
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),

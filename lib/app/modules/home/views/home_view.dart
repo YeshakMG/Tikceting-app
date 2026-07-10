@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
@@ -11,12 +15,66 @@ import 'package:oro_ticket_app/data/locals/hive_boxes.dart';
 import 'package:oro_ticket_app/widgets/app_scafold.dart';
 import 'package:oro_ticket_app/widgets/daily_info_tile.dart';
 import 'package:oro_ticket_app/widgets/dashboard_card.dart';
-import 'package:oro_ticket_app/widgets/reset_dashboard_dialog.dart';
 
-class HomeView extends StatelessWidget {
+class HomeView extends StatefulWidget {
+  const HomeView({super.key});
+
+  @override
+  State<HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<HomeView> {
   final HomeController homeController = Get.put(HomeController());
+  final Connectivity _connectivity = Connectivity();
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+  bool _isConnected = false;
+  String _connectionStatus = 'Checking connection...';
 
-  HomeView({super.key});
+  @override
+  void initState() {
+    super.initState();
+    _listenToConnectivity();
+  }
+
+  @override
+  void dispose() {
+    _connectivitySubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _listenToConnectivity() async {
+    await _updateConnectionStatus();
+    _connectivitySubscription = _connectivity.onConnectivityChanged.listen((_) async {
+      await _updateConnectionStatus();
+    });
+  }
+
+  Future<void> _updateConnectionStatus() async {
+    try {
+      final connectivityResults = await _connectivity.checkConnectivity();
+      final hasNetwork = connectivityResults.any((result) => result != ConnectivityResult.none);
+
+      if (!hasNetwork) {
+        setState(() {
+          _isConnected = false;
+          _connectionStatus = 'Offline';
+        });
+        return;
+      }
+
+      final results = await InternetAddress.lookup('example.com');
+      final hasInternet = results.isNotEmpty && results.first.rawAddress.isNotEmpty;
+      setState(() {
+        _isConnected = hasInternet;
+        _connectionStatus = hasInternet ? 'Online' : 'Offline';
+      });
+    } catch (_) {
+      setState(() {
+        _isConnected = false;
+        _connectionStatus = 'Offline';
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -27,6 +85,31 @@ class HomeView extends StatelessWidget {
       return PopScope(
         child: AppScaffold(
           title: 'Oromia Transport Agency',
+          titleWidget: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Oromia Transport Agency',
+                style: AppTextStyles.subtitle1,
+              ),
+              const SizedBox(width: 8),
+              Container(
+                height: 28,
+                width: 28,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                ),
+                padding: const EdgeInsets.all(4),
+                child: ClipOval(
+                  child: Image.asset(
+                    'assets/logo/OTA_logo.png',
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+            ],
+          ),
           userName: user?.fullName ?? 'Employee',
           body: SingleChildScrollView(
             child: Column(
@@ -64,59 +147,97 @@ class HomeView extends StatelessWidget {
                           ],
                         ),
                       ),
-                      // Sync Button
-                      Row(
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          ElevatedButton(
-                            onPressed: () {
-                              Get.to(() => SyncView());
-                            },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.white.withOpacity(0.3),
-                              foregroundColor: Colors.white,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 16, vertical: 8),
-                              textStyle: AppTextStyles.button,
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: _isConnected
+                                  ? Colors.green.shade100
+                                  : Colors.orange.shade100,
+                              borderRadius: BorderRadius.circular(999),
                             ),
-                            child: const Text('Sync'),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _isConnected ? Icons.wifi : Icons.wifi_off,
+                                  size: 16,
+                                  color: _isConnected
+                                      ? Colors.green.shade700
+                                      : Colors.orange.shade700,
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  _connectionStatus,
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                          IconButton(
-                            onPressed: () async {
-                              Get.snackbar(
-                                'Syncing',
-                                'Please wait...',
-                                snackPosition: SnackPosition.BOTTOM,
-                                backgroundColor: Colors.blueGrey,
-                                colorText: Colors.white,
-                                showProgressIndicator: true,
-                                isDismissible: false,
-                              );
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              ElevatedButton(
+                                onPressed: () {
+                                  Get.to(() => SyncView());
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.white.withOpacity(0.3),
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 16, vertical: 8),
+                                  textStyle: AppTextStyles.button,
+                                ),
+                                child: const Text(
+                                'Trip list',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              ),
+                              IconButton(
+                                onPressed: () async {
+                                  Get.snackbar(
+                                    'Syncing',
+                                    'Please wait...',
+                                    snackPosition: SnackPosition.BOTTOM,
+                                    backgroundColor: Colors.blueGrey,
+                                    colorText: Colors.white,
+                                    showProgressIndicator: true,
+                                    isDismissible: false,
+                                  );
 
-                              try {
-                                await homeController.syncTrips();
-                                Get.closeCurrentSnackbar(); // Close loading snackbar
-                                Get.snackbar(
-                                  'Success',
-                                  'Synced Successfully!',
-                                  snackPosition: SnackPosition.BOTTOM,
-                                  backgroundColor: AppColors.primaryHover,
-                                  colorText: AppColors.background,
-                                );
-                              } catch (e) {
-                                Get.closeCurrentSnackbar(); // Close loading snackbar
-                                Get.snackbar(
-                                  'Error',
-                                  e.toString(),
-                                  snackPosition: SnackPosition.BOTTOM,
-                                  backgroundColor: Colors.red,
-                                  colorText: Colors.white,
-                                );
-                              }
-                            },
-                            icon: const Icon(Icons.sync, color: Colors.white),
+                                  try {
+                                    await homeController.syncTrips();
+                                    Get.closeCurrentSnackbar();
+                                    Get.snackbar(
+                                      'Success',
+                                      'Synced Successfully!',
+                                      snackPosition: SnackPosition.BOTTOM,
+                                      backgroundColor: AppColors.primaryHover,
+                                      colorText: AppColors.background,
+                                    );
+                                  } catch (e) {
+                                    Get.closeCurrentSnackbar();
+                                    Get.snackbar(
+                                      'Error',
+                                      e.toString(),
+                                      snackPosition: SnackPosition.BOTTOM,
+                                      backgroundColor: Colors.red,
+                                      colorText: Colors.white,
+                                    );
+                                  }
+                                },
+                                icon: const Icon(Icons.sync, color: Colors.white),
+                              ),
+                            ],
                           ),
                         ],
                       ),

@@ -53,17 +53,63 @@ class VehiclesView extends StatelessWidget {
       ],
       body: Column(
         children: [
-          // Show total vehicles count
           Obx(
-            () => Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Text(
-                'Total Vehicles: ${controller.allVehicles.length}',
-                style: AppTextStyles.buttonMedium,
+            () => Container(
+              margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppColors.cardAlt,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Total vehicles',
+                        style: AppTextStyles.buttonMedium.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${controller.allVehicles.length}',
+                        style: AppTextStyles.buttonMediumB.copyWith(fontSize: 20),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: controller.isConnected.value
+                          ? Colors.green.shade100
+                          : Colors.orange.shade100,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          controller.isConnected.value ? Icons.wifi : Icons.wifi_off,
+                          size: 16,
+                          color: controller.isConnected.value ? Colors.green : Colors.orange,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          controller.connectionStatus.value,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          // 🔍 Full-width search bar
           Padding(
             padding: const EdgeInsets.all(12.0),
             child: TextField(
@@ -240,7 +286,7 @@ class VehiclesView extends StatelessWidget {
                                               BorderRadius.circular(20),
                                         ),
                                         child: Text(
-                                          vehicle.status ?? 'N/A',
+                                          vehicle.status,
                                           style: const TextStyle(
                                               color: Colors.white,
                                               fontSize: 12),

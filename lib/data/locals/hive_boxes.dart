@@ -11,10 +11,13 @@ import 'package:oro_ticket_app/data/locals/models/user_model.dart';
 import 'package:oro_ticket_app/data/locals/models/vehicle_print_lock_model.dart';
 import 'package:oro_ticket_app/data/locals/models/vehicle_route.dart';
 import 'package:path_provider/path_provider.dart' as path_provider;
+import 'package:uuid/uuid.dart';
 
 import 'models/vehicle_model.dart';
 
 class HiveBoxes {
+  static const Uuid _uuid = Uuid();
+
   static const String vehiclesBox = 'vehiclesBox';
   static const String departureTerminalsBox = 'departureTerminalsBox';
   static const String arrivalTerminalsBox = 'arrivalTerminalsBox';
@@ -65,16 +68,12 @@ class HiveBoxes {
         Hive.openBox<VehiclePrintLock>('vehiclePrintLocksBox'),
       ]);
 
+      await _normalizeTransactionIds();
+
       _initialized = true;
     } catch (e) {
       debugPrint('Hive initialization failed: $e');
       rethrow;
-    }
-  }
-
-  static Future<void> _deleteBoxIfExists(String boxName) async {
-    if (await Hive.boxExists(boxName)) {
-      await Hive.deleteBoxFromDisk(boxName);
     }
   }
 
@@ -84,5 +83,35 @@ class HiveBoxes {
       return await Hive.openBox<T>(boxName);
     }
     return Hive.box<T>(boxName);
+  }
+
+  static Future<void> _normalizeTransactionIds() async {
+    final tripStorage = Hive.box<TripModel>(tripBox);
+    final serviceChargeStorage = Hive.box<ServiceChargeModel>(serviceChargeBox);
+
+    int updatedTrips = 0;
+    int updatedServiceCharges = 0;
+
+    for (final trip in tripStorage.values) {
+      if (trip.transactionId.trim().isEmpty) {
+        trip.transactionId = _uuid.v4();
+        await trip.save();
+        updatedTrips++;
+      }
+    }
+
+    for (final charge in serviceChargeStorage.values) {
+      if (charge.transactionId.trim().isEmpty) {
+        charge.transactionId = _uuid.v4();
+        await charge.save();
+        updatedServiceCharges++;
+      }
+    }
+
+    if (updatedTrips > 0 || updatedServiceCharges > 0) {
+      debugPrint(
+        'Normalized transaction IDs: trips=$updatedTrips, serviceCharges=$updatedServiceCharges',
+      );
+    }
   }
 }

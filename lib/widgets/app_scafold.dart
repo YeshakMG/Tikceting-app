@@ -16,6 +16,7 @@ import 'package:oro_ticket_app/widgets/custom_drawer.dart';
 
 class AppScaffold extends StatefulWidget {
   final String title;
+  final Widget? titleWidget;
   final Widget body;
   final List<Widget>? actions;
   final bool showBottomNavBar;
@@ -26,6 +27,7 @@ class AppScaffold extends StatefulWidget {
   const AppScaffold({
     super.key,
     required this.title,
+    this.titleWidget,
     required this.body,
     this.actions,
     this.showBottomNavBar = true,
@@ -92,6 +94,7 @@ class _AppScaffoldState extends State<AppScaffold> {
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     Builder(
                       builder: (context) => IconButton(
@@ -99,7 +102,11 @@ class _AppScaffoldState extends State<AppScaffold> {
                         onPressed: () => Scaffold.of(context).openDrawer(),
                       ),
                     ),
-                    Text(widget.title, style: AppTextStyles.subtitle1),
+                    Expanded(
+                      child: widget.titleWidget != null
+                          ? widget.titleWidget!
+                          : Text(widget.title, style: AppTextStyles.subtitle1),
+                    ),
                     Row(children: widget.actions ?? []),
                   ],
                 ),

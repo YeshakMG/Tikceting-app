@@ -24,6 +24,13 @@ class DailyInfoTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.background,
         borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -47,10 +54,20 @@ class DailyInfoTile extends StatelessWidget {
             ),
           ),
           if (onRefresh != null)
-            IconButton(
-              icon: const Icon(Icons.refresh, color: Colors.grey),
+            TextButton(
               onPressed: onRefresh,
-              tooltip: 'Refresh',
+              style: TextButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(40, 36),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                visualDensity: VisualDensity.compact,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              child: const Text('Refresh'),
             ),
         ],
       ),

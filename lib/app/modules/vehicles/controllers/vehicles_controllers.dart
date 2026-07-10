@@ -1,19 +1,23 @@
-import 'dart:convert';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'dart:async';
+import 'dart:io';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:get/get.dart';
-import 'package:http/http.dart' as http;
-import 'package:oro_ticket_app/app/modules/sign_in/services/auth_service.dart';
 import 'package:oro_ticket_app/data/locals/models/vehicle_model.dart';
 import 'package:oro_ticket_app/data/repositories/sync_repository.dart';
 
 class VehiclesController extends GetxController {
   final SyncRepository syncRepo = Get.find<SyncRepository>();
+  final Connectivity _connectivity = Connectivity();
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   RxList<VehicleModel> allVehicles = <VehicleModel>[].obs;
   RxList<VehicleModel> filteredVehicles = <VehicleModel>[].obs;
   RxBool isLoading = false.obs;
   RxBool isSyncing = false.obs;
   RxString errorMessage = ''.obs;
+  RxBool isConnected = false.obs;
+  RxString connectionStatus = 'Checking connection...'.obs;
 
   // Pagination controls
   final int itemsPerPage = 10;
@@ -24,8 +28,46 @@ class VehiclesController extends GetxController {
   @override
   void onInit() {
     super.onInit();
+    _listenToConnectivity();
     loadInitialVehicles();
     syncRepo.vehicleChanges.listen((_) => loadLocalVehicles());
+  }
+
+  @override
+  void onClose() {
+    _connectivitySubscription?.cancel();
+    super.onClose();
+  }
+
+  Future<void> _listenToConnectivity() async {
+    await updateConnectionStatus();
+    _connectivitySubscription = _connectivity.onConnectivityChanged.listen((_) async {
+      await updateConnectionStatus();
+      if (isConnected.value) {
+        await loadInitialVehicles();
+      }
+    });
+  }
+
+  Future<void> updateConnectionStatus() async {
+    try {
+      final connectivityResults = await _connectivity.checkConnectivity();
+      final hasNetwork = connectivityResults.any((result) => result != ConnectivityResult.none);
+
+      if (!hasNetwork) {
+        isConnected(false);
+        connectionStatus('Offline');
+        return;
+      }
+
+      final results = await InternetAddress.lookup('example.com');
+      final hasInternet = results.isNotEmpty && results.first.rawAddress.isNotEmpty;
+      isConnected(hasInternet);
+      connectionStatus(hasInternet ? 'Online' : 'Offline');
+    } catch (_) {
+      isConnected(false);
+      connectionStatus('Offline');
+    }
   }
 
   Future<void> loadInitialVehicles() async {
@@ -33,53 +75,70 @@ class VehiclesController extends GetxController {
       isLoading(true);
       errorMessage('');
 
-      // This will automatically handle offline case
+      await updateConnectionStatus();
       await loadLocalVehicles();
 
-      // Only show error if we have no local data AND offline
-      if (allVehicles.isEmpty && !(await syncRepo.isOnline)) {
+      if (isConnected.value) {
+        await syncRepo.syncAllCompanyUserVehicles(forceSync: true);
+        await loadLocalVehicles();
+      } else if (allVehicles.isEmpty) {
         errorMessage('No vehicles found (offline mode)');
       }
-     } catch (e) {
-       errorMessage('Failed to load vehicles. Please check your internet connection and try again.');
-     } finally {
-       isLoading(false);
-     }
+    } catch (e) {
+      if (allVehicles.isEmpty) {
+        errorMessage('Failed to load vehicles. Please check your internet connection and try again.');
+      }
+    } finally {
+      isLoading(false);
+    }
   }
 
   Future<void> loadLocalVehicles() async {
     final vehicles = await syncRepo.getVehicles();
     allVehicles.assignAll(vehicles);
     filteredVehicles.assignAll(vehicles);
-    hasMore(
-        allVehicles.length >= itemsPerPage); // Assume more if we have full page
+    currentPage(1);
+    hasMore(allVehicles.length > itemsPerPage);
   }
 
   Future<void> refreshVehicles() async {
     try {
       isSyncing(true);
       errorMessage('');
+      await updateConnectionStatus();
+
+      if (!isConnected.value) {
+        Get.snackbar(
+          'Offline',
+          'No internet connection. Showing locally stored vehicles.',
+          snackPosition: SnackPosition.BOTTOM,
+        );
+        return;
+      }
+
       await syncRepo.syncAllCompanyUserVehicles(forceSync: true);
+      await loadLocalVehicles();
     } catch (e) {
-      // Don't show error if we have local data
-       if (allVehicles.isEmpty) {
-         errorMessage('Unable to sync vehicles. Please check your internet connection and try again.');
-       } else {
-         Get.snackbar('Offline', 'Showing locally stored vehicles',
-             snackPosition: SnackPosition.BOTTOM);
-       }
-     } finally {
-       isSyncing(false);
-     }
-   }
+      if (allVehicles.isEmpty) {
+        errorMessage('Unable to sync vehicles. Please check your internet connection and try again.');
+      } else {
+        Get.snackbar('Sync issue', 'Showing locally stored vehicles', snackPosition: SnackPosition.BOTTOM);
+      }
+    } finally {
+      isSyncing(false);
+    }
+  }
 
   Future<void> refreshVehiclesIfOnline() async {
-    final isOnline = await syncRepo.isOnline;
-    if (isOnline) {
+    await updateConnectionStatus();
+    if (isConnected.value) {
       await refreshVehicles();
     } else {
-      Get.snackbar('Offline', 'No internet connection. Showing locally stored vehicles.',
-          snackPosition: SnackPosition.BOTTOM);
+      Get.snackbar(
+        'Offline',
+        'No internet connection. Showing locally stored vehicles.',
+        snackPosition: SnackPosition.BOTTOM,
+      );
     }
   }
 
@@ -90,10 +149,6 @@ class VehiclesController extends GetxController {
       isPageLoading(true);
       currentPage++;
 
-      // In a real app, you might fetch next page from API here
-      // For now we'll just show more of the locally stored vehicles
-
-      // Simulate pagination from local storage
       final startIndex = (currentPage.value - 1) * itemsPerPage;
       if (startIndex < allVehicles.length) {
         hasMore(startIndex + itemsPerPage < allVehicles.length);
@@ -111,14 +166,14 @@ class VehiclesController extends GetxController {
   }
 
   void filterVehicles(String query) {
-    currentPage(1); // Reset to first page when filtering
+    currentPage(1);
     if (query.isEmpty) {
       filteredVehicles.assignAll(allVehicles);
     } else {
       filteredVehicles.assignAll(
-        allVehicles.where((v) =>
-            v.plateNumber.toLowerCase().contains(query.toLowerCase()) ||
-            (v.status?.toLowerCase().contains(query.toLowerCase()) ?? false)),
+        allVehicles.where((vehicle) =>
+            vehicle.plateNumber.toLowerCase().contains(query.toLowerCase()) ||
+            vehicle.status.toLowerCase().contains(query.toLowerCase())),
       );
     }
     hasMore(filteredVehicles.length > itemsPerPage);

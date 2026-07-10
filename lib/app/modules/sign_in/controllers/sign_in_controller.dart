@@ -26,6 +26,22 @@ class SignInController extends GetxController {
     super.onInit();
     // Clear text fields when sign-in view is initialized (including after logout)
     clearFields();
+
+    ever(loginError, (error) {
+      if (error is String && error.isNotEmpty) {
+        Get.snackbar(
+          'Login Error',
+          error,
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: AppColors.error,
+          colorText: AppColors.titleAlt,
+          duration: const Duration(seconds: 4),
+          margin: const EdgeInsets.all(10),
+          borderRadius: 8,
+        );
+        loginError.value = '';
+      }
+    });
   }
 
   void clearFields() {
@@ -76,84 +92,69 @@ class SignInController extends GetxController {
       }
      } catch (e) {
        print("Error:$e");
-       // Update loginError observable for the view to observe
        loginError.value = 'Network error occurred. Please check your connection and try again.';
-       Get.snackbar(
-         'Login Error',
-         'Network error occurred. Please check your connection and try again.',
-         snackPosition: SnackPosition.BOTTOM,
-         backgroundColor: AppColors.error,
-         colorText: AppColors.titleAlt,
-         duration: const Duration(seconds: 4),
-       );
     } finally {
       isLoading.value = false;
     }
   }
 
   void _handleLoginError(Map<String, dynamic> result) {
-    String title = 'Login Failed';
     String message = 'An error occurred during login';
 
-    // 1. Check for rate limiting (handled before server request)
     if (result['rate_limited'] == true) {
-      title = result['snackbar_title'] ?? 'Rate Limit Exceeded';
-      message = result['snackbar_message'] ?? 'For security reasons, login attempts are limited. Please wait before trying again.';
-    }
-    // 2. Handle HTTP status code based errors
-    else if (result['statusCode'] != null) {
+      message = result['snackbar_message'] ??
+          'For security reasons, login attempts are limited. Please wait before trying again.';
+    } else if (result['error_type'] == 'config') {
+      message = result['message'] ??
+          'App configuration is invalid. Please contact support.';
+    } else if (result['error_type'] == 'network') {
+      message = result['message'] ??
+          'Unable to connect to the server. Please check your internet connection and try again.';
+    } else if (result['statusCode'] != null) {
       final statusCode = result['statusCode'] as int;
       switch (statusCode) {
         case 400:
-          title = 'Bad Request';
-          message = result['message'] ?? 'Invalid request data';
+          message = result['message'] ?? 'Invalid request data. Please check your email and password.';
           break;
         case 401:
-          title = 'Login Failed';
-          message = 'Email or password is incorrect';
+          message = 'Email or password is incorrect.';
           break;
         case 403:
-          title = 'Forbidden';
-          message = 'Access denied';
+          message = 'Access denied. Please contact support if you believe this is an error.';
           break;
         case 404:
-          title = 'Not Found';
-          message = 'Login endpoint not found';
+          message = 'Login endpoint not found. Please try again later.';
           break;
         case 422:
-          title = 'Validation Error';
-          message = result['message'] ?? 'Validation failed';
+          message = result['message'] ?? 'Validation failed. Please check your credentials.';
           break;
         case 429:
-          title = 'Too Many Requests';
-          message = 'Rate limit exceeded, please try again later';
+          message = 'Too many login attempts. Please wait a minute and try again.';
           break;
         case 500:
-          title = 'Server Error';
-          message = 'Internal server error, please try again later';
+          message = 'Server error occurred. Please try again later.';
           break;
         case 502:
-          title = 'Bad Gateway';
-          message = 'Server temporarily unavailable';
+          message = 'Server temporarily unavailable. Please try again later.';
           break;
         case 503:
-          title = 'Service Unavailable';
-          message = 'Service is currently unavailable';
+          message = 'Service is currently unavailable. Please try again later.';
           break;
         default:
-          title = 'Login Error';
-          message = result['message'] ?? 'An unexpected error occurred';
+          message = result['message'] ?? 'An unexpected error occurred during login.';
       }
+    } else if (result['errors'] != null) {
+      if (result['errors'] is List && result['errors'].isNotEmpty) {
+        message = result['errors'].first.toString();
+      } else if (result['errors'] is String) {
+        message = result['errors'];
+      }
+    } else if (result['message'] != null) {
+      message = result['message'];
     }
-    // ... rest of your error handling code ...
-    
-    // Update loginError observable for the view to observe
+
     loginError.value = message;
-    
-    // REMOVE the direct Get.snackbar call from here
-    // Let the _SignInErrorHandler widget handle showing the snackbar
-    
-    print('📢 Login error set: $message'); // For debugging
+    print('📢 Login error set: $message');
   }
 
   @override

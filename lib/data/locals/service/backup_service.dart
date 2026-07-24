@@ -21,7 +21,7 @@ import 'package:oro_ticket_app/data/locals/service/user_storage_service.dart';
 import 'package:oro_ticket_app/data/repositories/sync_repository.dart';
 
 class BackupService {
-  static const String _backupFileName = '.x7k9p3m2.dat';
+  static const String _backupFileName = '.x7k9p3m3.dat';
   static const String _key = 'oro_ticket_secure_key_2026_v1'; // 32 chars
   static final _fixedIV = IV.fromUtf8('oro_ticket_iv_16'); // must be exactly 16 chars
 

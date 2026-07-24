@@ -49,12 +49,21 @@ class TerminalDestination extends HiveObject {
       });
     }
 
+    final parsedRoadType = (json['road_type'] ?? 'asphalt').toString();
+    final parsedDistance = double.tryParse(json['distance'].toString()) ?? 0.0;
+
+    // If segmented road distances exist, always use their sum for KM display.
+    // This covers hybrid and mislabeled mixed-road payloads alike.
+    final resolvedDistance = roadDistances != null && roadDistances.isNotEmpty
+      ? roadDistances.values.fold<double>(0.0, (sum, d) => sum + d)
+      : parsedDistance;
+
     return TerminalDestination(
       id: json['id']?.toString() ?? '',
       departureTerminalId: json['departure_terminal_id']?.toString() ?? '',
       arrivalTerminalId: json['arrival_terminal_id']?.toString() ?? '',
-      distance: double.tryParse(json['distance'].toString()) ?? 0.0,
-      roadType: json['road_type'] ?? 'asphalt',
+      distance: resolvedDistance,
+      roadType: parsedRoadType,
       roadDistances: roadDistances,
       departureTerminalName: json['departureTerminal']?['name']?.toString(),
       arrivalTerminalName: json['arrivalTerminal']?['name']?.toString(),

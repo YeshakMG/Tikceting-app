@@ -467,9 +467,17 @@ class _TicketViewState extends State<TicketView> {
                               final route =
                                   vehicle.currentRoute!.terminalDestination!;
 
+                              final hasSegmentedDistances =
+                                  route.roadDistances != null &&
+                                      route.roadDistances!.isNotEmpty;
+                              final distanceForKm = hasSegmentedDistances
+                                  ? route.roadDistances!.values
+                                      .fold<double>(0.0, (sum, d) => sum + d)
+                                  : route.distance;
+
                               // Update distance from vehicle route
                               _ticketController.km.value =
-                                  "${route.distance.toStringAsFixed(1)} km";
+                                "${distanceForKm.toStringAsFixed(1)} km";
 
                               // Update arrival terminal info if not already selected
                               // if (route.arrivalTerminalName != null) {

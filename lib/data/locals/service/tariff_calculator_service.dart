@@ -72,6 +72,7 @@ class TariffCalculatorService {
     double totalBaseTariff = 0.0;
     Map<String, double> breakdown = {};
     bool usedEstimation = false;
+    final missingTariffRoadTypes = <String>[];
 
     final roadSegments = terminalDest.getRoadSegments();
 
@@ -85,18 +86,40 @@ class TariffCalculatorService {
     ''');
 
     for (var segment in roadSegments) {
-      double segmentPrice = _calculateSegmentPrice(
+      final segmentPrice = _calculateSegmentPrice(
         vehicleLevelId: vehicleLevelId,
         roadType: segment.roadType,
         distance: segment.distance,
         terminalDestinationId: terminalDest.id,
         fleetTypeId: vehicle.fleetTypeId,
       );
+
+      if (segmentPrice == null) {
+        missingTariffRoadTypes.add(segment.roadType);
+        print(
+            '❌ Missing tariff for road segment ${segment.roadType}. Stopping strict calculation.');
+        continue;
+      }
       
       totalBaseTariff += segmentPrice;
       breakdown[segment.roadType] = (breakdown[segment.roadType] ?? 0.0) + segmentPrice;
       
       print('📍 ${segment.roadType}: ${segment.distance.toStringAsFixed(2)}km × rate = ${segmentPrice.toStringAsFixed(2)} ETB');
+    }
+
+    if (missingTariffRoadTypes.isNotEmpty) {
+      usedEstimation = true;
+      final uniqueRoadTypes = missingTariffRoadTypes.toSet().join(', ');
+      return TariffCalculationResult(
+        baseTariff: 0.0,
+        serviceCharge: 0.0,
+        totalAmount: 0.0,
+        roadTypeBreakdown: {},
+        commissionRate: commissionRate,
+        isEstimated: usedEstimation,
+        error:
+            'Missing tariff for road type(s): $uniqueRoadTypes. Please configure tariffs before issuing this ticket.',
+      );
     }
 
     if (totalBaseTariff == 0.0) {
@@ -132,7 +155,7 @@ class TariffCalculatorService {
     );
   }
 
-  static double _calculateSegmentPrice({
+  static double? _calculateSegmentPrice({
     required String vehicleLevelId,
     required String roadType,
     required double distance,
@@ -147,8 +170,8 @@ class TariffCalculatorService {
     );
 
     if (tariff == null || !tariff.isValid()) {
-      print('❌ No valid tariff for Level:$vehicleLevelId, Road:$roadType - Using 0.00');
-      return 0.0;
+      print('❌ No valid tariff for Level:$vehicleLevelId, Road:$roadType');
+      return null;
     }
 
     double segmentPrice = distance * tariff.pricePerKm;
@@ -192,7 +215,14 @@ class TariffCalculatorService {
       );
 
       totalDistance += segment.distance;
-      double rate = tariff?.pricePerKm ?? 0.0;
+      if (tariff == null || !tariff.isValid()) {
+        return {
+          'error':
+              'Missing tariff for road type ${segment.roadType}. Please configure tariffs before issuing this ticket.'
+        };
+      }
+
+      double rate = tariff.pricePerKm;
       double cost = segment.distance * rate;
 
       preview['segments'].add({
@@ -207,7 +237,7 @@ class TariffCalculatorService {
 
     preview['total_distance'] = totalDistance;
     preview['estimated_base_tariff'] = estimatedTotal;
-    preview['has_valid_tariffs'] = estimatedTotal > 0;
+    preview['has_valid_tariffs'] = true;
 
     return preview;
   }

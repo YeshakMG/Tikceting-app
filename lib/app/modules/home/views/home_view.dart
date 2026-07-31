@@ -30,6 +30,15 @@ class _HomeViewState extends State<HomeView> {
   bool _isConnected = false;
   String _connectionStatus = 'Checking connection...';
 
+  void _closeActiveDialog() {
+    final overlayContext = Get.overlayContext;
+    if (overlayContext == null) return;
+    final navigator = Navigator.of(overlayContext, rootNavigator: true);
+    if (navigator.canPop()) {
+      navigator.pop();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -335,7 +344,7 @@ class _HomeViewState extends State<HomeView> {
                                             TextButton(
                                               onPressed: () {
                                                 print('Message acknowledged');
-                                                Get.back();
+                                                _closeActiveDialog();
                                               },
                                               child: Text(
                                                 'OK',
@@ -349,7 +358,7 @@ class _HomeViewState extends State<HomeView> {
                                             TextButton(
                                               onPressed: () {
                                                 print('Cancel clicked');
-                                                Get.back();
+                                                _closeActiveDialog();
                                               },
                                               child: Text(
                                                 'No',
@@ -380,7 +389,7 @@ class _HomeViewState extends State<HomeView> {
                                                           seconds: 3), () {
                                                     if (Get.isDialogOpen ??
                                                         false) {
-                                                      Get.back();
+                                                      _closeActiveDialog();
                                                     }
                                                   });
                                                   return;
@@ -409,7 +418,7 @@ class _HomeViewState extends State<HomeView> {
                                                           seconds: 3), () {
                                                     if (Get.isDialogOpen ??
                                                         false) {
-                                                      Get.back();
+                                                      _closeActiveDialog();
                                                     }
                                                   });
                                                 } catch (e) {

@@ -1,5 +1,6 @@
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:oro_ticket_app/app/modules/home/controllers/home_controller.dart';
@@ -368,6 +369,8 @@ class _TicketViewState extends State<TicketView> {
               // Plate input with suggestion
               TextFormField(
                 controller: plateController,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                 decoration: InputDecoration(
                   labelText: 'Plate Number',
                   prefixIcon: Icon(Icons.directions_bus),
@@ -1251,16 +1254,19 @@ Call: 8556
                 final exitQRData = _prepareExitQRData(tripData);
 
                 final printer = TicketPrinter();
-                final copies = 1; // Test mode: print one ticket only
+                final parsedCopies =
+                    int.tryParse(_ticketController.seatNo.value) ?? 1;
+                final copies = parsedCopies > 0 ? parsedCopies : 1;
+                // final copies = 1; // Test mode: print one ticket only
 
-                print('🖨️ Attempting to print $copies copy for test...');
+                print('🖨️ Attempting to print $copies copies...');
 
-                final ticketTexts = <String>[
-                  _prepareTicketTextForSeat(tripData, 1),
-                ];
-                final passengerQRDatas = <String>[
-                  _preparePassengerQRDataForSeat(tripData, 1),
-                ];
+                final ticketTexts =
+                    List<String>.generate(copies, (index) =>
+                        _prepareTicketTextForSeat(tripData, index + 1));
+                final passengerQRDatas =
+                    List<String>.generate(copies, (index) =>
+                        _preparePassengerQRDataForSeat(tripData, index + 1));
 
                 final printResult = await printer.connectAndPrintVerified(
                   texts: ticketTexts,
@@ -1309,7 +1315,7 @@ Call: 8556
                   print('   service charge payload ready for save/post:');
                   print('   ${serviceCharge.toJson()}');
 
-                  final enhancedSyncRepo = EnhancedSyncRepository();
+                  final enhancedSyncRepo = Get.find<EnhancedSyncRepository>();
                   final syncResult = await enhancedSyncRepo.saveDataWithSync(
                     trip: tripData,
                     serviceCharge: serviceCharge,

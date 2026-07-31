@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:oro_ticket_app/core/utils/security_utils.dart';
 import 'package:oro_ticket_app/data/locals/models/departure_terminal_model.dart';
 import 'package:oro_ticket_app/data/locals/models/trip_model.dart';
@@ -25,7 +27,10 @@ class AuthService {
 
   AuthService() {
     // Initialize cleanup timer for rate limits (runs every hour)
-    Timer.periodic(const Duration(microseconds: 1000), (_) async => await SecurityUtils.cleanupRateLimits());
+    Timer.periodic(
+      const Duration(hours: 1),
+      (_) async => await SecurityUtils.cleanupRateLimits(),
+    );
   }
 
   // Initialize secure client
@@ -35,6 +40,9 @@ class AuthService {
 
   static const String baseUrl = 'https://admin.ota.gov.et/api';
   static const _loginRateLimitKey = 'login_rate_limit';
+  static const Duration _loginRequestTimeout = Duration(seconds: 10);
+  static const Duration _loginRetryWindow = Duration(minutes: 1);
+  static const Duration _loginRetryDelay = Duration(seconds: 3);
 
   Future<Map<String, dynamic>> login({
     required String email,
@@ -74,16 +82,53 @@ class AuthService {
 
     try {
       final url = Uri.parse('$baseUrl/auth/company-user/login');
-      print('🌐 API Request: POST $url');
-      print('📤 Request Body: ${jsonEncode({'email': email, 'password': '***'})}');
+      final packageInfo = await PackageInfo.fromPlatform();
+      final appVersion = packageInfo.version;
+      final loginPayload = {
+        'email': email,
+        'password': password,
+        'appVersion': appVersion,
+      };
 
-      final response = await _secureClient
-          .post(
-            url,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'email': email, 'password': password}),
-          )
-          .timeout(const Duration(seconds: 10));
+      print('🌐 API Request: POST $url');
+      print('📤 Request Body: ${jsonEncode({'email': email, 'password': '***', 'appVersion': appVersion})}');
+
+      final startedAt = Stopwatch()..start();
+      int attempt = 0;
+      late final http.Response response;
+
+      while (true) {
+        attempt++;
+        try {
+          response = await _secureClient
+              .post(
+                url,
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(loginPayload),
+              )
+              .timeout(_loginRequestTimeout);
+          break;
+        } catch (e) {
+          final shouldRetry = _isRetryableLoginNetworkError(e);
+          final elapsed = startedAt.elapsed;
+          final hasRemainingWindow = elapsed < _loginRetryWindow;
+
+          if (!shouldRetry || !hasRemainingWindow) {
+            rethrow;
+          }
+
+          final remaining = _loginRetryWindow - elapsed;
+          final waitDuration =
+              remaining < _loginRetryDelay ? remaining : _loginRetryDelay;
+
+          print(
+              '⚠️ Login attempt $attempt failed (${e.runtimeType}). Retrying in ${waitDuration.inSeconds}s...');
+
+          if (waitDuration > Duration.zero) {
+            await Future.delayed(waitDuration);
+          }
+        }
+      }
 
       print('📥 Response Status: ${response.statusCode}');
       // Don't log response body for login as it contains sensitive token data
@@ -142,6 +187,13 @@ class AuthService {
          'details': e.toString()
        };
     }
+  }
+
+  bool _isRetryableLoginNetworkError(Object error) {
+    return error is TimeoutException ||
+        error is SocketException ||
+        error is HandshakeException ||
+        error is http.ClientException;
   }
 
   Future<void> syncUserDataAfterLogin() async {

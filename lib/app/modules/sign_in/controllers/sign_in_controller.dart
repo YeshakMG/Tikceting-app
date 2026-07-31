@@ -5,7 +5,6 @@ import 'package:get/get.dart';
 import 'package:oro_ticket_app/core/constants/colors.dart';
 
 import '../../home/controllers/home_controller.dart';
-import '../../../../data/locals/models/user_model.dart';
 import '../services/auth_service.dart';
 
 class SignInController extends GetxController {
@@ -28,7 +27,7 @@ class SignInController extends GetxController {
     clearFields();
 
     ever(loginError, (error) {
-      if (error is String && error.isNotEmpty) {
+      if (error.isNotEmpty) {
         Get.snackbar(
           'Login Error',
           error,
@@ -62,6 +61,12 @@ class SignInController extends GetxController {
     
     final email = emailController.text.trim();
     final password = passwordController.text;
+
+    // Guard for direct login() calls even if UI form validation is bypassed.
+    if (email.isEmpty || password.isEmpty) {
+      loginError.value = 'Please enter both email and password.';
+      return;
+    }
 
     isLoading.value = true;
 
@@ -100,6 +105,8 @@ class SignInController extends GetxController {
 
   void _handleLoginError(Map<String, dynamic> result) {
     String message = 'An error occurred during login';
+    final serverMessage = (result['message'] ?? '').toString();
+    final normalizedServerMessage = serverMessage.toLowerCase();
 
     if (result['rate_limited'] == true) {
       message = result['snackbar_message'] ??
@@ -114,7 +121,13 @@ class SignInController extends GetxController {
       final statusCode = result['statusCode'] as int;
       switch (statusCode) {
         case 400:
-          message = result['message'] ?? 'Invalid request data. Please check your email and password.';
+          if (normalizedServerMessage.contains('version') ||
+              normalizedServerMessage.contains('update')) {
+            message = 'Please update your mobile application to the latest version.';
+          } else {
+            message = result['message'] ??
+                'Invalid request data. Please check your email and password.';
+          }
           break;
         case 401:
           message = 'Email or password is incorrect.';
@@ -126,7 +139,16 @@ class SignInController extends GetxController {
           message = 'Login endpoint not found. Please try again later.';
           break;
         case 422:
-          message = result['message'] ?? 'Validation failed. Please check your credentials.';
+          final errors = result['errors'];
+          if (errors is List && errors.isNotEmpty) {
+            message = errors.first.toString();
+          } else {
+            message = result['message'] ??
+                'Please enter a valid email and password.';
+          }
+          break;
+        case 426:
+          message = 'Please update your mobile application to the latest version.';
           break;
         case 429:
           message = 'Too many login attempts. Please wait a minute and try again.';
@@ -141,7 +163,16 @@ class SignInController extends GetxController {
           message = 'Service is currently unavailable. Please try again later.';
           break;
         default:
-          message = result['message'] ?? 'An unexpected error occurred during login.';
+          if (normalizedServerMessage.contains('version') ||
+              normalizedServerMessage.contains('update')) {
+            message = 'Please update your mobile application to the latest version.';
+          } else if (normalizedServerMessage.contains('email') &&
+              normalizedServerMessage.contains('password')) {
+            message = 'Email or password is incorrect.';
+          } else {
+            message = result['message'] ??
+                'An unexpected error occurred during login.';
+          }
       }
     } else if (result['errors'] != null) {
       if (result['errors'] is List && result['errors'].isNotEmpty) {
@@ -150,7 +181,15 @@ class SignInController extends GetxController {
         message = result['errors'];
       }
     } else if (result['message'] != null) {
-      message = result['message'];
+      if (normalizedServerMessage.contains('version') ||
+          normalizedServerMessage.contains('update')) {
+        message = 'Please update your mobile application to the latest version.';
+      } else if (normalizedServerMessage.contains('email') &&
+          normalizedServerMessage.contains('password')) {
+        message = 'Email or password is incorrect.';
+      } else {
+        message = result['message'];
+      }
     }
 
     loginError.value = message;

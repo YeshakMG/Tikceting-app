@@ -15,6 +15,7 @@ import 'package:oro_ticket_app/data/locals/models/trip_model.dart';
 import 'package:oro_ticket_app/data/locals/service/arrival_storage_service.dart';
 import 'package:oro_ticket_app/data/locals/service/commission_rule_storage_service.dart';
 import 'package:oro_ticket_app/data/locals/service/departure_terminal_storage_service.dart';
+import 'package:oro_ticket_app/data/locals/service/sync_dedup_service.dart';
 import 'package:oro_ticket_app/data/locals/service/tariff_storage_service.dart';
 import 'package:oro_ticket_app/data/locals/service/backup_service.dart';
 
@@ -36,6 +37,7 @@ class SyncRepository {
   // Use secure HTTP client for all network requests
   late final http.Client _secureClient;
   bool _secureClientInitialized = false;
+  final SyncDedupService _syncDedupService = SyncDedupService();
 
   // Initialize secure client
   Future<void> _initSecureClient() async {
@@ -590,9 +592,23 @@ class SyncRepository {
       for (final entry in tripEntries) {
         final key = entry.key as int;
         final trip = entry.value;
+        String? reservationKey;
 
         try {
           final payload = _sanitizePayloadForServer('trip', trip.toJson());
+          final reservation =
+              await _syncDedupService.reserve('trip', payload);
+          if (reservation.status == SyncDedupStatus.alreadySynced) {
+            print('♻️ Duplicate trip payload detected, skipping POST');
+            keysToDelete.add(key);
+            continue;
+          }
+          if (reservation.status == SyncDedupStatus.inFlight) {
+            print('⏳ Trip payload is already in-flight, skipping this cycle');
+            continue;
+          }
+          reservationKey = reservation.key;
+
       print('📦 Sending trip payload: ${jsonEncode(payload)}');
 
       final response = await _secureClient.post(
@@ -606,15 +622,24 @@ class SyncRepository {
           );
 
           if (response.statusCode == 200 || response.statusCode == 201) {
+            if (reservationKey != null) {
+              await _syncDedupService.markSynced(reservationKey);
+            }
             trip.isSynced = true;
             keysToDelete.add(key);
             print('Trip synced successfully: ${trip.vehicleId}');
             print('Sent payload: ${jsonEncode(trip.toJson())}');
           } else {
+            if (reservationKey != null) {
+              await _syncDedupService.release(reservationKey);
+            }
             print('Failed to sync trip: ${response.body}');
             print('Sent payload: ${jsonEncode(trip.toJson())}');
           }
         } catch (e) {
+          if (reservationKey != null) {
+            await _syncDedupService.release(reservationKey);
+          }
           print('Error syncing individual trip: $e');
           continue;
         }
@@ -650,9 +675,24 @@ class SyncRepository {
     for (final entry in entries.entries) {
       final key = entry.key;
       final serviceCharge = entry.value;
+      String? reservationKey;
 
       try {
         final payload = _sanitizePayloadForServer('service_charge', serviceCharge.toJson());
+        final reservation =
+            await _syncDedupService.reserve('service_charge', payload);
+        if (reservation.status == SyncDedupStatus.alreadySynced) {
+          print('♻️ Duplicate service-charge payload detected, skipping POST');
+          await box.delete(key);
+          continue;
+        }
+        if (reservation.status == SyncDedupStatus.inFlight) {
+          print(
+              '⏳ Service-charge payload is already in-flight, skipping this cycle');
+          continue;
+        }
+        reservationKey = reservation.key;
+
       print('📦 Sending service-charge payload: ${jsonEncode(payload)}');
 
       final response = await _secureClient.post(
@@ -666,12 +706,21 @@ class SyncRepository {
         );
 
           if (response.statusCode == 200 || response.statusCode == 201) {
+           if (reservationKey != null) {
+             await _syncDedupService.markSynced(reservationKey);
+           }
            print('✅ Synced: ${serviceCharge.departureTerminal}');
            await box.delete(key);
          } else {
+           if (reservationKey != null) {
+             await _syncDedupService.release(reservationKey);
+           }
            print('❌ Failed (${response.statusCode}): ${response.body}');
          }
        } catch (e) {
+         if (reservationKey != null) {
+           await _syncDedupService.release(reservationKey);
+         }
          print('❗ Sync error: $e');
          if (Get.context != null) {
            Get.snackbar("Error", "Sync error occurred. Please try again later.");

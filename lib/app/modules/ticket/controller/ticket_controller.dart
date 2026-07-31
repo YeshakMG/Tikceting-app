@@ -201,6 +201,12 @@ class TicketController extends GetxController {
           backgroundColor: Colors.orange.withValues(alpha: 0.8),
           colorText: Colors.white,
         );
+
+        tariff.value = "N/A";
+        serviceCharge.value = "N/A";
+        totalPayment.value = "N/A";
+        roadTypeBreakdown.clear();
+        return;
       }
 
       // Update values

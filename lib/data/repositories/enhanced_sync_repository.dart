@@ -11,6 +11,7 @@ import 'package:oro_ticket_app/data/locals/models/trip_model.dart';
 import 'package:oro_ticket_app/data/locals/models/service_charge_model.dart';
 import 'package:oro_ticket_app/data/locals/service/backup_service.dart';
 import 'package:oro_ticket_app/data/locals/service/connectivity_service.dart';
+import 'package:oro_ticket_app/data/locals/service/sync_dedup_service.dart';
 import 'package:oro_ticket_app/data/locals/service/sync_queue_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -53,8 +54,10 @@ class EnhancedSyncRepository {
   final ConnectivityService _connectivityService =
       Get.find<ConnectivityService>();
   final SyncQueueService _syncQueueService = SyncQueueService();
+  final SyncDedupService _syncDedupService = SyncDedupService();
 
   Timer? _periodicSyncTimer;
+  bool _isSyncCycleRunning = false;
 
   void startPeriodicSync({Duration interval = const Duration(minutes: 5)}) {
     _periodicSyncTimer?.cancel();
@@ -73,22 +76,35 @@ class EnhancedSyncRepository {
   }
 
   Future<void> _trySyncPendingData() async {
+    if (_isSyncCycleRunning) {
+      print('⏳ Sync cycle already running, skipping overlapping run');
+      return;
+    }
+
+    // Clean up any local duplicates before attempting posts.
+    await _cleanupLocalDuplicates();
+
     if (!_connectivityService.isConnected.value) {
       print('📴 Device is offline, skipping automatic background sync');
       return;
     }
 
-    print('🔄 Starting automatic background sync (internet is available)...');
+    _isSyncCycleRunning = true;
+    try {
+      print('🔄 Starting automatic background sync (internet is available)...');
 
-    // 1. Process items waiting in the retry queue
-    await _processSyncQueue();
+      // 1. Process items waiting in the retry queue
+      await _processSyncQueue();
 
-    // 2. Actively scan main local storage for any unsynced trips and pending service charges
-    //    This ensures data posts automatically in background without needing the print button
-    await _syncUnsyncedTripsFromStorage();
-    await _syncPendingServiceChargesFromStorage();
+      // 2. Actively scan main local storage for any unsynced trips and pending service charges
+      //    This ensures data posts automatically in background without needing the print button
+      await _syncUnsyncedTripsFromStorage();
+      await _syncPendingServiceChargesFromStorage();
 
-    print('✅ Automatic background sync cycle finished.');
+      print('✅ Automatic background sync cycle finished.');
+    } finally {
+      _isSyncCycleRunning = false;
+    }
   }
 
   // Process the dedicated sync queue (items that failed immediate sync or were queued while offline)
@@ -234,6 +250,7 @@ class EnhancedSyncRepository {
   }
 
   Future<SyncRequestResult> _syncTrip(Map<String, dynamic> tripData) async {
+    String? reservationKey;
     try {
       final authService = Get.find<AuthService>();
       final token = await authService.getToken();
@@ -244,6 +261,17 @@ class EnhancedSyncRepository {
       }
 
       final payload = await _buildPayloadForSync('trip', tripData);
+      final reservation = await _syncDedupService.reserve('trip', payload);
+      if (reservation.status == SyncDedupStatus.alreadySynced) {
+        print('♻️ Duplicate trip payload detected, skipping POST');
+        return SyncRequestResult.success();
+      }
+      if (reservation.status == SyncDedupStatus.inFlight) {
+        print('⏳ Trip payload is already in-flight, retrying in next cycle');
+        return SyncRequestResult.failure(reason: SyncFailureReason.unexpected);
+      }
+      reservationKey = reservation.key;
+
       print('📦 Sending trip payload: ${jsonEncode(payload)}');
 
       final response = await http
@@ -260,14 +288,24 @@ class EnhancedSyncRepository {
 
       final ok = response.statusCode == 200 || response.statusCode == 201;
       if (!ok) {
+        if (reservationKey != null) {
+          await _syncDedupService.release(reservationKey);
+        }
         print('❌ Server rejected trip ${response.statusCode}');
         return SyncRequestResult.failure(
           reason: SyncFailureReason.server,
           statusCode: response.statusCode,
         );
       }
+
+      if (reservationKey != null) {
+        await _syncDedupService.markSynced(reservationKey);
+      }
       return SyncRequestResult.success();
     } catch (e) {
+      if (reservationKey != null) {
+        await _syncDedupService.release(reservationKey);
+      }
       final err = e.toString();
       if (err.contains('HandshakeException') || err.contains('CERTIFICATE_VERIFY_FAILED')) {
         print('❌ Trip sync TLS error (CERTIFICATE_VERIFY_FAILED). Device date/time is likely incorrect — set to automatic/network time.');
@@ -280,6 +318,7 @@ class EnhancedSyncRepository {
 
   // Sync a single service charge to server
   Future<SyncRequestResult> _syncServiceCharge(Map<String, dynamic> chargeData) async {
+    String? reservationKey;
     try {
       final authService = Get.find<AuthService>();
       final token = await authService.getToken();
@@ -290,6 +329,19 @@ class EnhancedSyncRepository {
       }
 
       final payload = await _buildPayloadForSync('service_charge', chargeData);
+      final reservation =
+          await _syncDedupService.reserve('service_charge', payload);
+      if (reservation.status == SyncDedupStatus.alreadySynced) {
+        print('♻️ Duplicate service-charge payload detected, skipping POST');
+        return SyncRequestResult.success();
+      }
+      if (reservation.status == SyncDedupStatus.inFlight) {
+        print(
+            '⏳ Service-charge payload is already in-flight, retrying in next cycle');
+        return SyncRequestResult.failure(reason: SyncFailureReason.unexpected);
+      }
+      reservationKey = reservation.key;
+
       print('📦 Sending service-charge payload: ${jsonEncode(payload)}');
 
       final response = await http
@@ -306,14 +358,24 @@ class EnhancedSyncRepository {
 
       final ok = response.statusCode == 200 || response.statusCode == 201;
       if (!ok) {
+        if (reservationKey != null) {
+          await _syncDedupService.release(reservationKey);
+        }
         print('❌ Server rejected service-charge ${response.statusCode}');
         return SyncRequestResult.failure(
           reason: SyncFailureReason.server,
           statusCode: response.statusCode,
         );
       }
+
+      if (reservationKey != null) {
+        await _syncDedupService.markSynced(reservationKey);
+      }
       return SyncRequestResult.success();
     } catch (e) {
+      if (reservationKey != null) {
+        await _syncDedupService.release(reservationKey);
+      }
       final err = e.toString();
       if (err.contains('HandshakeException') || err.contains('CERTIFICATE_VERIFY_FAILED')) {
         print('❌ Service charge sync TLS error (CERTIFICATE_VERIFY_FAILED). Device date/time is likely incorrect — set to automatic/network time.');
@@ -422,6 +484,9 @@ class EnhancedSyncRepository {
   }) async {
     _ensureTransactionIds(trip: trip, serviceCharge: serviceCharge);
 
+    // Keep local stores clean even when offline printing continues.
+    await _cleanupLocalDuplicates();
+
     final liveResult = await Connectivity().checkConnectivity();
     final isOnlineNow = liveResult != ConnectivityResult.none;
 
@@ -476,6 +541,97 @@ class EnhancedSyncRepository {
     );
 
     return SyncResult.savedOffline;
+  }
+
+  Future<void> _cleanupLocalDuplicates() async {
+    final removedTrips = await _removeDuplicateTripsFromHive();
+    final removedCharges = await _removeDuplicateServiceChargesFromHive();
+    final removedQueueItems = await _syncQueueService.removeDuplicateItems();
+
+    if (removedTrips > 0 || removedCharges > 0 || removedQueueItems > 0) {
+      print(
+          '🧹 Duplicate cleanup summary -> trips:$removedTrips, service_charges:$removedCharges, queue_items:$removedQueueItems');
+    }
+  }
+
+  Future<int> _removeDuplicateTripsFromHive() async {
+    final tripBox = Hive.box<TripModel>(HiveBoxes.tripBox);
+    final entries = tripBox.toMap().entries.toList();
+
+    final seen = <String, dynamic>{};
+    final keysToDelete = <dynamic>[];
+
+    for (final entry in entries) {
+      final trip = entry.value;
+      final id = _tripIdentity(trip);
+      if (id.isEmpty) {
+        continue;
+      }
+
+      if (seen.containsKey(id)) {
+        keysToDelete.add(entry.key);
+      } else {
+        seen[id] = entry.key;
+      }
+    }
+
+    for (final key in keysToDelete) {
+      await tripBox.delete(key);
+    }
+
+    if (keysToDelete.isNotEmpty) {
+      print('🧹 Auto-deleted ${keysToDelete.length} duplicate trip record(s) from Hive');
+    }
+
+    return keysToDelete.length;
+  }
+
+  Future<int> _removeDuplicateServiceChargesFromHive() async {
+    final chargeBox = Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
+    final entries = chargeBox.toMap().entries.toList();
+
+    final seen = <String, dynamic>{};
+    final keysToDelete = <dynamic>[];
+
+    for (final entry in entries) {
+      final charge = entry.value;
+      final id = _serviceChargeIdentity(charge);
+      if (id.isEmpty) {
+        continue;
+      }
+
+      if (seen.containsKey(id)) {
+        keysToDelete.add(entry.key);
+      } else {
+        seen[id] = entry.key;
+      }
+    }
+
+    for (final key in keysToDelete) {
+      await chargeBox.delete(key);
+    }
+
+    if (keysToDelete.isNotEmpty) {
+      print('🧹 Auto-deleted ${keysToDelete.length} duplicate service-charge record(s) from Hive');
+    }
+
+    return keysToDelete.length;
+  }
+
+  String _tripIdentity(TripModel trip) {
+    if (trip.transactionId.trim().isNotEmpty) {
+      return 'trip:tx:${trip.transactionId.trim()}';
+    }
+
+    return 'trip:fp:${trip.vehicleId}|${trip.dateAndTime.toIso8601String()}|${trip.departureTerminalId}|${trip.arrivalTerminalId}|${trip.companyId}|${trip.totalPaid}';
+  }
+
+  String _serviceChargeIdentity(ServiceChargeModel charge) {
+    if (charge.transactionId.trim().isNotEmpty) {
+      return 'service_charge:tx:${charge.transactionId.trim()}';
+    }
+
+    return 'service_charge:fp:${charge.departureTerminal}|${charge.dateTime.toIso8601String()}|${charge.employeeId}|${charge.companyId}|${charge.serviceChargeAmount}';
   }
 
   void _ensureTransactionIds({

@@ -70,7 +70,7 @@ class TariffStorageService {
             t.vehicleLevelId == vehicleLevelId &&
             t.roadType == roadType &&
             t.fleetTypeId == fleetTypeId &&
-            t.terminalDestinationId == null, // General fleet tariff
+            t.terminalDestinationId == null,
       );
       if (fleetMatches.isNotEmpty) {
         final fleetMatch = fleetMatches.first;
@@ -79,7 +79,6 @@ class TariffStorageService {
         return fleetMatch;
       }
 
-      // Try any tariff with this fleet type (even if has terminal destination)
       final anyFleetMatches = validTariffs.where(
         (t) =>
             t.vehicleLevelId == vehicleLevelId &&
@@ -129,14 +128,14 @@ class TariffStorageService {
       return generalMatch;
     }
 
-    // PRIORITY 5: Any matching tariff for this vehicle level and road type
+    // PRIORITY 5: Any same-road tariff for this vehicle level
     final anyMatches = validTariffs.where(
       (t) => t.vehicleLevelId == vehicleLevelId && t.roadType == roadType,
     );
     if (anyMatches.isNotEmpty) {
       final anyMatch = anyMatches.first;
       print(
-          '⚠️ PRIORITY 5: Using fallback tariff: ${anyMatch.id} with price ${anyMatch.pricePerKm}');
+          '⚠️ PRIORITY 5: Using lowest-priority same-road tariff: ${anyMatch.id} with price ${anyMatch.pricePerKm}');
       return anyMatch;
     }
 
@@ -204,7 +203,7 @@ class TariffStorageService {
       for (var t in fleetTariffs) {
         print('''
   ID: ${t.id}
-  Level: ${t.vehicleLevelId?.substring(0, 8) ?? "null"}... (${t.vehicleLevelName})
+  Level: ${t.vehicleLevelId.substring(0, 8)}... (${t.vehicleLevelName})
   Road: ${t.roadType}
   Price: ${t.pricePerKm} ETB/km
   Terminal: ${t.terminalDestinationId?.substring(0, 8) ?? "null"}...

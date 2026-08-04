@@ -57,7 +57,31 @@ class EnhancedSyncRepository {
   final SyncDedupService _syncDedupService = SyncDedupService();
 
   Timer? _periodicSyncTimer;
-  bool _isSyncCycleRunning = false;
+  bool _isSyncInProgress = false;
+
+  bool _beginSyncIfAvailable(String source) {
+    if (_isSyncInProgress) {
+      print('⏳ Sync already in progress, skipping $source attempt');
+      return false;
+    }
+
+    _isSyncInProgress = true;
+    return true;
+  }
+
+  void _endSync() {
+    _isSyncInProgress = false;
+  }
+
+  Future<void> _clearBackupIfNoPendingSyncData() async {
+    final tripBox = Hive.box<TripModel>(HiveBoxes.tripBox);
+    final serviceBox = Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
+    final pendingQueueItems = await _syncQueueService.getPendingItems();
+
+    if (tripBox.isEmpty && serviceBox.isEmpty && pendingQueueItems.isEmpty) {
+      await BackupService.clearBackup();
+    }
+  }
 
   void startPeriodicSync({Duration interval = const Duration(minutes: 5)}) {
     _periodicSyncTimer?.cancel();
@@ -76,21 +100,19 @@ class EnhancedSyncRepository {
   }
 
   Future<void> _trySyncPendingData() async {
-    if (_isSyncCycleRunning) {
-      print('⏳ Sync cycle already running, skipping overlapping run');
+    if (!_beginSyncIfAvailable('background sync')) {
       return;
     }
 
-    // Clean up any local duplicates before attempting posts.
-    await _cleanupLocalDuplicates();
-
-    if (!_connectivityService.isConnected.value) {
-      print('📴 Device is offline, skipping automatic background sync');
-      return;
-    }
-
-    _isSyncCycleRunning = true;
     try {
+      // Clean up any local duplicates before attempting posts.
+      await _cleanupLocalDuplicates();
+
+      if (!_connectivityService.isConnected.value) {
+        print('📴 Device is offline, skipping automatic background sync');
+        return;
+      }
+
       print('🔄 Starting automatic background sync (internet is available)...');
 
       // 1. Process items waiting in the retry queue
@@ -100,10 +122,11 @@ class EnhancedSyncRepository {
       //    This ensures data posts automatically in background without needing the print button
       await _syncUnsyncedTripsFromStorage();
       await _syncPendingServiceChargesFromStorage();
+      await _clearBackupIfNoPendingSyncData();
 
       print('✅ Automatic background sync cycle finished.');
     } finally {
-      _isSyncCycleRunning = false;
+      _endSync();
     }
   }
 
@@ -141,7 +164,10 @@ class EnhancedSyncRepository {
 
           print('   ✅ Queue item synced successfully: ${item.type}');
         } else {
-          await _syncQueueService.incrementRetry(item.id);
+          await _syncQueueService.incrementRetry(
+            item.id,
+            statusCode: result.statusCode,
+          );
           print('   ⚠️ Queue item failed (will retry later): ${item.type}');
         }
       } catch (e) {
@@ -186,6 +212,108 @@ class EnhancedSyncRepository {
   ) async {
     final payload = await _withAppVersion(data);
     return sanitizePayloadForServer(type, payload);
+  }
+
+  String? _extractServerIdFromResponse(String body) {
+    try {
+      final data = jsonDecode(body);
+      if (data is Map<String, dynamic>) {
+        final directId = data['id'] ?? data['server_id'] ?? data['serverId'];
+        if (directId != null) {
+          return directId.toString();
+        }
+
+        final nested = data['data'];
+        if (nested is Map<String, dynamic>) {
+          final nestedId = nested['id'] ?? nested['server_id'] ?? nested['serverId'];
+          if (nestedId != null) {
+            return nestedId.toString();
+          }
+        }
+      } else if (data is List) {
+        final first = data.firstOrNull;
+        if (first is Map<String, dynamic>) {
+          final firstId = first['id'] ?? first['server_id'] ?? first['serverId'];
+          if (firstId != null) {
+            return firstId.toString();
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _clearSuccessfulLocalDuplicates(String type, Map<String, dynamic> payload) async {
+    if (type == 'trip') {
+      final tripBox = Hive.box<TripModel>(HiveBoxes.tripBox);
+      final transactionId = payload['transaction_id']?.toString() ?? payload['transactionId']?.toString();
+      final vehicleId = payload['vehicle_id']?.toString() ?? '';
+      final dateAndTime = payload['date_and_time']?.toString() ?? '';
+      final departure = payload['departure_terminal_id']?.toString() ?? '';
+      final arrival = payload['arrival_terminal_id']?.toString() ?? '';
+      final companyId = payload['company_id']?.toString() ?? '';
+      final totalPaid = (payload['total_paid'] as num?)?.toDouble() ?? 0.0;
+
+      final matches = tripBox.values.where((existing) {
+        final existingTransactionId = existing.transactionId;
+        if (transactionId != null &&
+            transactionId.isNotEmpty &&
+            existingTransactionId.isNotEmpty &&
+            existingTransactionId == transactionId) {
+          return true;
+        }
+
+        return existing.vehicleId == vehicleId &&
+            existing.dateAndTime.toIso8601String() == dateAndTime &&
+            existing.departureTerminalId == departure &&
+            existing.arrivalTerminalId == arrival &&
+            existing.companyId == companyId &&
+            existing.totalPaid == totalPaid;
+      }).toList();
+
+      for (final match in matches) {
+        await match.delete();
+      }
+
+      if (matches.isNotEmpty) {
+        print('🧹 Removed ${matches.length} local trip duplicate(s) after successful sync');
+      }
+      return;
+    }
+
+    if (type == 'service_charge') {
+      final chargeBox = Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
+      final transactionId = payload['transaction_id']?.toString() ?? payload['transactionId']?.toString();
+      final departure = payload['departure_terminal_id']?.toString() ?? '';
+      final dateAndTime = payload['date_and_time']?.toString() ?? '';
+      final amount = (payload['service_charge_amount'] as num?)?.toDouble() ?? 0.0;
+      final companyId = payload['company_id']?.toString() ?? '';
+      final createdBy = payload['created_by']?.toString() ?? '';
+
+      final matches = chargeBox.values.where((existing) {
+        final existingTransactionId = existing.transactionId;
+        if (transactionId != null &&
+            transactionId.isNotEmpty &&
+            existingTransactionId.isNotEmpty &&
+            existingTransactionId == transactionId) {
+          return true;
+        }
+
+        return existing.departureTerminal == departure &&
+            existing.dateTime.toIso8601String() == dateAndTime &&
+            existing.companyId == companyId &&
+            existing.employeeId == createdBy &&
+            existing.serviceChargeAmount == amount;
+      }).toList();
+
+      for (final match in matches) {
+        await match.delete();
+      }
+
+      if (matches.isNotEmpty) {
+        print('🧹 Removed ${matches.length} local service-charge duplicate(s) after successful sync');
+      }
+    }
   }
 
   Future<Map<String, dynamic>> _withAppVersion(Map<String, dynamic> data) async {
@@ -291,6 +419,23 @@ class EnhancedSyncRepository {
         if (reservationKey != null) {
           await _syncDedupService.release(reservationKey);
         }
+
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          print('🔐 Trip sync auth failed (${response.statusCode}); backing off instead of hammering the queue');
+          return SyncRequestResult.failure(
+            reason: SyncFailureReason.connection,
+            statusCode: response.statusCode,
+          );
+        }
+
+        if (response.statusCode == 429) {
+          print('⏳ Trip sync rate-limited (429); waiting for the next backoff window');
+          return SyncRequestResult.failure(
+            reason: SyncFailureReason.server,
+            statusCode: response.statusCode,
+          );
+        }
+
         print('❌ Server rejected trip ${response.statusCode}');
         return SyncRequestResult.failure(
           reason: SyncFailureReason.server,
@@ -301,6 +446,13 @@ class EnhancedSyncRepository {
       if (reservationKey != null) {
         await _syncDedupService.markSynced(reservationKey);
       }
+
+      final serverId = _extractServerIdFromResponse(response.body);
+      if (serverId != null) {
+        print('🆔 Trip server id: $serverId');
+      }
+
+      await _clearSuccessfulLocalDuplicates('trip', payload);
       return SyncRequestResult.success();
     } catch (e) {
       if (reservationKey != null) {
@@ -361,6 +513,23 @@ class EnhancedSyncRepository {
         if (reservationKey != null) {
           await _syncDedupService.release(reservationKey);
         }
+
+        if (response.statusCode == 401 || response.statusCode == 403) {
+          print('🔐 Service-charge sync auth failed (${response.statusCode}); backing off instead of hammering the queue');
+          return SyncRequestResult.failure(
+            reason: SyncFailureReason.connection,
+            statusCode: response.statusCode,
+          );
+        }
+
+        if (response.statusCode == 429) {
+          print('⏳ Service-charge sync rate-limited (429); waiting for the next backoff window');
+          return SyncRequestResult.failure(
+            reason: SyncFailureReason.server,
+            statusCode: response.statusCode,
+          );
+        }
+
         print('❌ Server rejected service-charge ${response.statusCode}');
         return SyncRequestResult.failure(
           reason: SyncFailureReason.server,
@@ -371,6 +540,13 @@ class EnhancedSyncRepository {
       if (reservationKey != null) {
         await _syncDedupService.markSynced(reservationKey);
       }
+
+      final serverId = _extractServerIdFromResponse(response.body);
+      if (serverId != null) {
+        print('🆔 Service-charge server id: $serverId');
+      }
+
+      await _clearSuccessfulLocalDuplicates('service_charge', payload);
       return SyncRequestResult.success();
     } catch (e) {
       if (reservationKey != null) {
@@ -487,57 +663,88 @@ class EnhancedSyncRepository {
     // Keep local stores clean even when offline printing continues.
     await _cleanupLocalDuplicates();
 
+    // Persist the ticket locally first so it survives app/network failures.
+    await _saveTripToHiveIfNeeded(trip);
+    await _saveServiceChargeToHiveIfNeeded(serviceCharge, trip);
+
+    final localTrip = _findLocalTripForSync(trip);
+    final localServiceCharge = _findLocalServiceChargeForSync(serviceCharge, trip);
+
+    if (_isSyncInProgress) {
+      print('⏳ Sync already in progress, saving locally and deferring server post');
+      await BackupService.backupData();
+
+      await _queueForRetry('trip', await _buildPayloadForSync('trip', localTrip.toJson()));
+      await _queueForRetry(
+        'service_charge',
+        await _buildPayloadForSync('service_charge', localServiceCharge.toJson()),
+      );
+
+      return SyncResult.savedOffline;
+    }
+
     final liveResult = await Connectivity().checkConnectivity();
     final isOnlineNow = liveResult != ConnectivityResult.none;
 
     if (isOnlineNow) {
-      print('🌐 [PRINT] Online — attempting direct post to server');
-
-      final tripPayload = await _buildPayloadForSync('trip', trip.toJson());
-      final chargePayload = await _buildPayloadForSync(
-        'service_charge',
-        serviceCharge.toJson(),
-      );
-      final tripResult = await _syncTrip(tripPayload);
-      final chargeResult = await _syncServiceCharge(chargePayload);
-      final tripSuccess = tripResult.success;
-      final chargeSuccess = chargeResult.success;
-
-      if (tripSuccess && chargeSuccess) {
-        await _removeExistingTripFromHive(trip);
-        await _removeExistingServiceChargeFromHive(serviceCharge, trip);
+      if (!_beginSyncIfAvailable('print sync')) {
+        print('📴 [PRINT] Sync busy, deferring post to later background sync');
+        await _queueForRetry('trip', await _buildPayloadForSync('trip', localTrip.toJson()));
+        await _queueForRetry(
+          'service_charge',
+          await _buildPayloadForSync('service_charge', localServiceCharge.toJson()),
+        );
         await BackupService.backupData();
-        print('✅ [PRINT] Successfully posted both to server. Local duplicates removed.');
-        return SyncResult.postedToServer;
+        return SyncResult.savedOffline;
       }
 
-      final failureReason = _pickFailureReason([tripResult, chargeResult]);
-      print('⚠️ [PRINT] Partial server post (trip:$tripSuccess, charge:$chargeSuccess) — keeping local records until both succeed');
-      _showSyncFailureMessage(reason: failureReason);
+      print('🌐 [PRINT] Online — attempting post from local Hive records');
 
-      if (!tripSuccess) {
-        await _saveTripToHiveIfNeeded(trip);
-        await _queueForRetry('trip', tripPayload);
-      }
-      if (!chargeSuccess) {
-        await _saveServiceChargeToHiveIfNeeded(serviceCharge, trip);
-        await _queueForRetry('service_charge', chargePayload);
-      }
+      try {
+        final tripPayload = await _buildPayloadForSync('trip', localTrip.toJson());
+        final chargePayload = await _buildPayloadForSync(
+          'service_charge',
+          localServiceCharge.toJson(),
+        );
+        final tripResult = await _syncTrip(tripPayload);
+        final chargeResult = await _syncServiceCharge(chargePayload);
+        final tripSuccess = tripResult.success;
+        final chargeSuccess = chargeResult.success;
 
-      await BackupService.backupData();
-      return SyncResult.partialSuccess;
+        if (tripSuccess && chargeSuccess) {
+          await _removeExistingTripFromHive(localTrip);
+          await _removeExistingServiceChargeFromHive(localServiceCharge, localTrip);
+          await _clearBackupIfNoPendingSyncData();
+          print('✅ [PRINT] Successfully posted both to server. Local duplicates removed.');
+          return SyncResult.postedToServer;
+        }
+
+        final failureReason = _pickFailureReason([tripResult, chargeResult]);
+        print('⚠️ [PRINT] Partial server post (trip:$tripSuccess, charge:$chargeSuccess) — keeping local records until both succeed');
+        _showSyncFailureMessage(reason: failureReason);
+
+        if (!tripSuccess) {
+          await _queueForRetry('trip', tripPayload);
+        }
+        if (!chargeSuccess) {
+          await _queueForRetry('service_charge', chargePayload);
+        }
+
+        await BackupService.backupData();
+        return SyncResult.partialSuccess;
+      } finally {
+        _endSync();
+      }
     }
 
     print('📴 [PRINT] No internet — saving to Hive once for later sync');
     _showSyncFailureMessage(reason: SyncFailureReason.connection);
-    await _saveTripToHiveIfNeeded(trip);
-    await _saveServiceChargeToHiveIfNeeded(serviceCharge, trip);
     await BackupService.backupData();
 
-    await _queueForRetry('trip', await _buildPayloadForSync('trip', trip.toJson()));
+    await _queueForRetry('trip', await _buildPayloadForSync('trip', localTrip.toJson()));
     await _queueForRetry(
       'service_charge',
-      await _buildPayloadForSync('service_charge', serviceCharge.toJson()),
+      await _buildPayloadForSync('service_charge', localServiceCharge.toJson()),
     );
 
     return SyncResult.savedOffline;
@@ -665,6 +872,59 @@ class EnhancedSyncRepository {
     );
 
     await _syncQueueService.addToQueue(item);
+  }
+
+  TripModel _findLocalTripForSync(TripModel trip) {
+    final tripBox = Hive.box<TripModel>(HiveBoxes.tripBox);
+    final match = tripBox.values.firstWhereOrNull((existing) {
+      if (trip.transactionId.isNotEmpty &&
+          existing.transactionId.isNotEmpty &&
+          existing.transactionId == trip.transactionId) {
+        return true;
+      }
+
+      return existing.vehicleId == trip.vehicleId &&
+          existing.dateAndTime.millisecondsSinceEpoch ==
+              trip.dateAndTime.millisecondsSinceEpoch &&
+          existing.km == trip.km &&
+          existing.tariff == trip.tariff &&
+          existing.serviceCharge == trip.serviceCharge &&
+          existing.totalPaid == trip.totalPaid &&
+          existing.departureTerminalId == trip.departureTerminalId &&
+          existing.arrivalTerminalId == trip.arrivalTerminalId &&
+          existing.companyId == trip.companyId &&
+          existing.employeeId == trip.employeeId;
+    });
+
+    return match ?? trip;
+  }
+
+  ServiceChargeModel _findLocalServiceChargeForSync(
+    ServiceChargeModel serviceCharge,
+    TripModel trip,
+  ) {
+    final chargeBox = Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final match = chargeBox.values.firstWhereOrNull((entry) {
+      if (serviceCharge.transactionId.isNotEmpty &&
+          entry.transactionId.isNotEmpty &&
+          entry.transactionId == serviceCharge.transactionId) {
+        return true;
+      }
+
+      final entryDate = DateTime(
+        entry.dateTime.year,
+        entry.dateTime.month,
+        entry.dateTime.day,
+      );
+      return entry.departureTerminal == trip.departureTerminalId &&
+          entry.employeeId == trip.employeeId &&
+          entryDate == today;
+    });
+
+    return match ?? serviceCharge;
   }
 
   Future<void> _saveTripToHiveIfNeeded(TripModel trip) async {

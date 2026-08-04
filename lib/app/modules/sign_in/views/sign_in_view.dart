@@ -109,6 +109,25 @@ class SignInView extends StatelessWidget {
                       ),
                     )),
 
+                Obx(() {
+                  final error = controller.loginError.value;
+                  if (error.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+
+                  return Padding(
+                    padding: EdgeInsets.only(
+                      top: AppDimensions.verticalSpacingSmall,
+                    ),
+                    child: Text(
+                      error,
+                      style: AppTextStyles.caption2.copyWith(
+                        color: AppColors.error,
+                      ),
+                    ),
+                  );
+                }),
+
                 SizedBox(height: AppDimensions.verticalSpacingLarge),
 
                 // Login Button

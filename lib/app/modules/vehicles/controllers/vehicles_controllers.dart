@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:oro_ticket_app/data/locals/models/vehicle_model.dart';
 import 'package:oro_ticket_app/data/repositories/sync_repository.dart';
@@ -16,6 +17,8 @@ class VehiclesController extends GetxController {
   RxBool isLoading = false.obs;
   RxBool isSyncing = false.obs;
   RxString errorMessage = ''.obs;
+  RxString syncStatusMessage = ''.obs;
+  RxInt syncedVehicleCount = 0.obs;
   RxBool isConnected = false.obs;
   RxString connectionStatus = 'Checking connection...'.obs;
 
@@ -74,13 +77,21 @@ class VehiclesController extends GetxController {
     try {
       isLoading(true);
       errorMessage('');
+      syncStatusMessage('');
 
       await updateConnectionStatus();
       await loadLocalVehicles();
 
       if (isConnected.value) {
-        await syncRepo.syncAllCompanyUserVehicles(forceSync: true);
+        final syncedCount = await syncRepo.syncAllCompanyUserVehicles(forceSync: true);
         await loadLocalVehicles();
+
+        if (syncedCount > 0) {
+          syncedVehicleCount(syncedCount);
+          syncStatusMessage('Successfully synced $syncedCount vehicles');
+        } else {
+          syncStatusMessage('Vehicles are already up to date');
+        }
       } else if (allVehicles.isEmpty) {
         errorMessage('No vehicles found (offline mode)');
       }
@@ -116,8 +127,22 @@ class VehiclesController extends GetxController {
         return;
       }
 
-      await syncRepo.syncAllCompanyUserVehicles(forceSync: true);
+      final syncedCount = await syncRepo.syncAllCompanyUserVehicles(forceSync: true);
       await loadLocalVehicles();
+
+      if (syncedCount > 0) {
+        syncedVehicleCount(syncedCount);
+        syncStatusMessage('Successfully synced $syncedCount vehicles');
+        Get.snackbar(
+          'Sync complete',
+          'Successfully synced $syncedCount vehicles',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.green,
+          colorText: Colors.white,
+        );
+      } else {
+        syncStatusMessage('Vehicles are already up to date');
+      }
     } catch (e) {
       if (allVehicles.isEmpty) {
         errorMessage('Unable to sync vehicles. Please check your internet connection and try again.');

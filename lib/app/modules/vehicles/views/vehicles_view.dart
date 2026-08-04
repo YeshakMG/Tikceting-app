@@ -126,6 +126,39 @@ class VehiclesView extends StatelessWidget {
               ),
             ),
           ),
+          Obx(
+            () => controller.syncStatusMessage.value.isEmpty
+                ? const SizedBox.shrink()
+                : Container(
+                    margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.success.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: AppColors.success.withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.check_circle_outline, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            controller.syncStatusMessage.value,
+                            style: AppTextStyles.caption2.copyWith(
+                              color: AppColors.success,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
           // Vehicles list
           Obx(
             () {

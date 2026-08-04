@@ -25,22 +25,6 @@ class SignInController extends GetxController {
     super.onInit();
     // Clear text fields when sign-in view is initialized (including after logout)
     clearFields();
-
-    ever(loginError, (error) {
-      if (error.isNotEmpty) {
-        Get.snackbar(
-          'Login Error',
-          error,
-          snackPosition: SnackPosition.BOTTOM,
-          backgroundColor: AppColors.error,
-          colorText: AppColors.titleAlt,
-          duration: const Duration(seconds: 4),
-          margin: const EdgeInsets.all(10),
-          borderRadius: 8,
-        );
-        loginError.value = '';
-      }
-    });
   }
 
   void clearFields() {
@@ -64,7 +48,7 @@ class SignInController extends GetxController {
 
     // Guard for direct login() calls even if UI form validation is bypassed.
     if (email.isEmpty || password.isEmpty) {
-      loginError.value = 'Please enter both email and password.';
+      _setLoginError('Please enter both email and password.');
       return;
     }
 
@@ -97,10 +81,24 @@ class SignInController extends GetxController {
       }
      } catch (e) {
        print("Error:$e");
-       loginError.value = 'Network error occurred. Please check your connection and try again.';
+       _setLoginError('Network error occurred. Please check your connection and try again.');
     } finally {
       isLoading.value = false;
     }
+  }
+
+  void _setLoginError(String message) {
+    loginError.value = message;
+    Get.snackbar(
+      'Login Error',
+      message,
+      snackPosition: SnackPosition.BOTTOM,
+      backgroundColor: AppColors.error,
+      colorText: AppColors.titleAlt,
+      duration: const Duration(seconds: 4),
+      margin: const EdgeInsets.all(10),
+      borderRadius: 8,
+    );
   }
 
   void _handleLoginError(Map<String, dynamic> result) {
@@ -192,7 +190,7 @@ class SignInController extends GetxController {
       }
     }
 
-    loginError.value = message;
+    _setLoginError(message);
     print('📢 Login error set: $message');
   }
 

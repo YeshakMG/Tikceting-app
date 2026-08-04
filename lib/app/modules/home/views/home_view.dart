@@ -399,8 +399,17 @@ class _HomeViewState extends State<HomeView> {
                                                 isSyncing.value = true;
 
                                                 try {
-                                                  await homeController
+                                                  final syncResult =
+                                                      await homeController
                                                       .syncServiceCharge();
+
+                                                  if (!syncResult.success) {
+                                                    message =
+                                                        '${syncResult.message}\nDashboard was not reset.';
+                                                    showMessage.value = true;
+                                                    isSyncing.value = false;
+                                                    return;
+                                                  }
 
                                                   // If sync successful → reset dashboard
                                                   homeController

@@ -48,7 +48,7 @@ class _DashboardCardState extends State<DashboardCard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text("Daily Revenue", style: AppTextStyles.subtitle2),
+                  Text("Daily Collected Ticket Tariff", style: AppTextStyles.subtitle2),
                   SizedBox(height: 8),
                   Text(
                       "${revenue.toStringAsFixed(1).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (Match m) => '${m[1]},')} ETB",

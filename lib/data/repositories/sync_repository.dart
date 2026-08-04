@@ -88,7 +88,7 @@ class SyncRepository {
     }
   }
 
-  Future<void> syncAllCompanyUserVehicles({bool forceSync = false}) async {
+  Future<int> syncAllCompanyUserVehicles({bool forceSync = false}) async {
     // Initialize secure client if not already done
     if (!_secureClientInitialized) {
       await _initSecureClient();
@@ -97,7 +97,7 @@ class SyncRepository {
 
     if (!await _isOnline && !forceSync) {
       print('🚫 Offline - Skipping vehicle sync');
-      return;
+      return 0;
     }
 
     try {
@@ -105,7 +105,7 @@ class SyncRepository {
       final token = await authService.getToken();
       if (token == null) {
         print('❌ No token available for sync');
-        return;
+        return 0;
       }
       final box = Hive.box<VehicleModel>(HiveBoxes.vehiclesBox);
 
@@ -219,9 +219,12 @@ class SyncRepository {
         // Backup the latest vehicles (and other data) after successful sync
         await BackupService.backupData();
       }
+
+      return totalSynced;
     } catch (e, stackTrace) {
       print('❌ Sync error: $e');
       print('Stack trace: $stackTrace');
+      return 0;
     }
   }
 
@@ -565,6 +568,105 @@ class SyncRepository {
     }
   }
 
+  String? _extractServerIdFromResponse(String body) {
+    try {
+      final json = jsonDecode(body);
+      if (json is Map<String, dynamic>) {
+        final directId = json['id'] ?? json['server_id'] ?? json['serverId'];
+        if (directId != null) {
+          return directId.toString();
+        }
+
+        final nested = json['data'];
+        if (nested is Map<String, dynamic>) {
+          final nestedId = nested['id'] ?? nested['server_id'] ?? nested['serverId'];
+          if (nestedId != null) {
+            return nestedId.toString();
+          }
+        }
+      } else if (json is List) {
+        final first = json.firstOrNull;
+        if (first is Map<String, dynamic>) {
+          final firstId = first['id'] ?? first['server_id'] ?? first['serverId'];
+          if (firstId != null) {
+            return firstId.toString();
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _clearSuccessfulLocalTripDuplicates(Map<String, dynamic> payload) async {
+    final tripBox = Hive.box<TripModel>(HiveBoxes.tripBox);
+    final transactionId = payload['transaction_id']?.toString() ?? payload['transactionId']?.toString();
+    final vehicleId = payload['vehicle_id']?.toString() ?? '';
+    final dateAndTime = payload['date_and_time']?.toString() ?? '';
+    final departure = payload['departure_terminal_id']?.toString() ?? '';
+    final arrival = payload['arrival_terminal_id']?.toString() ?? '';
+    final companyId = payload['company_id']?.toString() ?? '';
+    final totalPaid = (payload['total_paid'] as num?)?.toDouble() ?? 0.0;
+
+    final matches = tripBox.values.where((existing) {
+      final existingTransactionId = existing.transactionId;
+      if (transactionId != null &&
+          transactionId.isNotEmpty &&
+          existingTransactionId.isNotEmpty &&
+          existingTransactionId == transactionId) {
+        return true;
+      }
+
+      return existing.vehicleId == vehicleId &&
+          existing.dateAndTime.toIso8601String() == dateAndTime &&
+          existing.departureTerminalId == departure &&
+          existing.arrivalTerminalId == arrival &&
+          existing.companyId == companyId &&
+          existing.totalPaid == totalPaid;
+    }).toList();
+
+    for (final match in matches) {
+      await match.delete();
+    }
+
+    if (matches.isNotEmpty) {
+      print('🧹 Removed ${matches.length} local trip duplicate(s) after successful sync');
+    }
+  }
+
+  Future<void> _clearSuccessfulLocalServiceChargeDuplicates(Map<String, dynamic> payload) async {
+    final chargeBox = Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
+    final transactionId = payload['transaction_id']?.toString() ?? payload['transactionId']?.toString();
+    final departure = payload['departure_terminal_id']?.toString() ?? '';
+    final dateAndTime = payload['date_and_time']?.toString() ?? '';
+    final amount = (payload['service_charge_amount'] as num?)?.toDouble() ?? 0.0;
+    final companyId = payload['company_id']?.toString() ?? '';
+    final createdBy = payload['created_by']?.toString() ?? '';
+
+    final matches = chargeBox.values.where((existing) {
+      final existingTransactionId = existing.transactionId;
+      if (transactionId != null &&
+          transactionId.isNotEmpty &&
+          existingTransactionId.isNotEmpty &&
+          existingTransactionId == transactionId) {
+        return true;
+      }
+
+      return existing.departureTerminal == departure &&
+          existing.dateTime.toIso8601String() == dateAndTime &&
+          existing.companyId == companyId &&
+          existing.employeeId == createdBy &&
+          existing.serviceChargeAmount == amount;
+    }).toList();
+
+    for (final match in matches) {
+      await match.delete();
+    }
+
+    if (matches.isNotEmpty) {
+      print('🧹 Removed ${matches.length} local service-charge duplicate(s) after successful sync');
+    }
+  }
+
   Future<void> syncTripsToServer() async {
     // Initialize secure client if not already done
     if (!_secureClientInitialized) {
@@ -627,8 +729,23 @@ class SyncRepository {
             }
             trip.isSynced = true;
             keysToDelete.add(key);
+            final serverId = _extractServerIdFromResponse(response.body);
+            if (serverId != null) {
+              print('🆔 Trip server id: $serverId');
+            }
+            await _clearSuccessfulLocalTripDuplicates(payload);
             print('Trip synced successfully: ${trip.vehicleId}');
             print('Sent payload: ${jsonEncode(trip.toJson())}');
+          } else if (response.statusCode == 401 || response.statusCode == 403) {
+            if (reservationKey != null) {
+              await _syncDedupService.release(reservationKey);
+            }
+            print('⚠️ Trip sync auth failed (${response.statusCode}); skipping this cycle');
+          } else if (response.statusCode == 429) {
+            if (reservationKey != null) {
+              await _syncDedupService.release(reservationKey);
+            }
+            print('⚠️ Trip sync rate-limited (429); backing off');
           } else {
             if (reservationKey != null) {
               await _syncDedupService.release(reservationKey);
@@ -709,8 +826,23 @@ class SyncRepository {
            if (reservationKey != null) {
              await _syncDedupService.markSynced(reservationKey);
            }
+           final serverId = _extractServerIdFromResponse(response.body);
+           if (serverId != null) {
+             print('🆔 Service-charge server id: $serverId');
+           }
+           await _clearSuccessfulLocalServiceChargeDuplicates(payload);
            print('✅ Synced: ${serviceCharge.departureTerminal}');
            await box.delete(key);
+         } else if (response.statusCode == 401 || response.statusCode == 403) {
+           if (reservationKey != null) {
+             await _syncDedupService.release(reservationKey);
+           }
+           print('⚠️ Service-charge sync auth failed (${response.statusCode}); skipping this cycle');
+         } else if (response.statusCode == 429) {
+           if (reservationKey != null) {
+             await _syncDedupService.release(reservationKey);
+           }
+           print('⚠️ Service-charge sync rate-limited (429); backing off');
          } else {
            if (reservationKey != null) {
              await _syncDedupService.release(reservationKey);

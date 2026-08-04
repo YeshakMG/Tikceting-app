@@ -8,6 +8,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:oro_ticket_app/core/utils/security_utils.dart';
 import 'package:oro_ticket_app/data/locals/models/departure_terminal_model.dart';
 import 'package:oro_ticket_app/data/locals/models/trip_model.dart';
+import 'package:oro_ticket_app/data/locals/models/vehicle_model.dart';
 import 'package:oro_ticket_app/data/locals/service/departure_terminal_storage_service.dart';
 import 'package:oro_ticket_app/data/locals/service/user_storage_service.dart';
 import 'package:oro_ticket_app/data/locals/service/token_storage_service.dart';
@@ -293,6 +294,8 @@ class AuthService {
     await TokenStorageService.clearToken();
     print('   - Deleting user data...');
     await UserStorageService.clearUser();
+    print('   - Clearing vehicle data...');
+    await Hive.box<VehicleModel>(HiveBoxes.vehiclesBox).clear();
     print('   - Clearing trip data...');
     await Hive.box<TripModel>(HiveBoxes.tripBox).clear();
     print('   - Clearing service charge data...');

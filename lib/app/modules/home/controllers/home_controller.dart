@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import 'package:hive/hive.dart';
@@ -12,6 +15,16 @@ import 'package:uuid/uuid.dart';
 
 // Fix the import for Ethiopian datetime
 import 'package:ethiopian_datetime/ethiopian_datetime.dart';
+
+class ServiceChargeSyncResult {
+  final bool success;
+  final String message;
+
+  const ServiceChargeSyncResult({
+    required this.success,
+    required this.message,
+  });
+}
 
 class HomeController extends GetxController {
   static const Uuid _uuid = Uuid();
@@ -176,9 +189,37 @@ class HomeController extends GetxController {
      }
   }
 
-  Future<void> syncServiceCharge() async {
+  Future<ServiceChargeSyncResult> syncServiceCharge() async {
+    final box = Hive.box<ServiceChargeModel>(HiveBoxes.serviceChargeBox);
+
+    if (box.isEmpty) {
+      return const ServiceChargeSyncResult(
+        success: true,
+        message: "No service charges to sync.",
+      );
+    }
+
+    final connectivityResults = await Connectivity().checkConnectivity();
+    final hasNetwork = connectivityResults
+        .any((result) => result != ConnectivityResult.none);
+    if (!hasNetwork) {
+      return const ServiceChargeSyncResult(
+        success: false,
+        message: "No internet connection. Please connect and try again.",
+      );
+    }
+
     try {
       await _syncRepository.syncServiceChargeToServer();
+
+      if (box.isNotEmpty) {
+        return const ServiceChargeSyncResult(
+          success: false,
+          message:
+              "Sync timed out or server did not accept all records. Please try again.",
+        );
+      }
+
       Get.snackbar(
         "Success",
         "Service charge synced successfully",
@@ -186,10 +227,17 @@ class HomeController extends GetxController {
         backgroundColor: AppColors.primaryHover,
         colorText: AppColors.background,
       );
-     } catch (e) {
-       Get.snackbar("Error", "Failed to sync service charge. Please try again.");
-       rethrow;
-     }
+      return const ServiceChargeSyncResult(
+        success: true,
+        message: "Service charge synced successfully.",
+      );
+    } catch (e) {
+      final message =
+          e is TimeoutException || e.toString().contains('TimeoutException')
+              ? "Sync timed out. Please check your connection and try again."
+              : "Failed to sync service charge. Please try again.";
+      return ServiceChargeSyncResult(success: false, message: message);
+    }
   }
 
   void resetDashboard() async {

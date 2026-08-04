@@ -39,6 +39,7 @@ class _TicketViewState extends State<TicketView> {
   final homeController = Get.put(HomeController());
   static const Duration vehicleLockDuration = Duration(hours: 1, minutes: 30);
   final ScrollController _scrollController = ScrollController();
+  bool _isPrinting = false;
 
   List<ArrivalTerminalModel> arrivalTerminals = [];
   ArrivalTerminalModel? selectedArrival;
@@ -154,8 +155,10 @@ class _TicketViewState extends State<TicketView> {
     _cleanupExpiredLocks();
 
     // Basic plate filter
-    var candidates = vehicleBox.values.toList();
-    if (input.isNotEmpty) {
+    final hasPlateInput = input.trim().isNotEmpty;
+    var candidates = <VehicleModel>[];
+    if (hasPlateInput) {
+      candidates = vehicleBox.values.toList();
       candidates = candidates.where((v) => v.plateNumber.toLowerCase().contains(input.toLowerCase())).toList();
     }
 
@@ -191,14 +194,14 @@ class _TicketViewState extends State<TicketView> {
 
     setState(() {
       plateInput = input;
-      suggestions = candidates;
+      suggestions = hasPlateInput ? candidates : [];
       if (plateController.text != input) {
         plateController.text = input;
         plateController.selection = TextSelection.fromPosition(TextPosition(offset: input.length));
       }
     });
 
-    if (input.isEmpty) {
+    if (!hasPlateInput) {
       _resetTicketController();
       _ticketController.selectedVehicle.value = null;
     }
@@ -211,9 +214,10 @@ class _TicketViewState extends State<TicketView> {
     _cleanupExpiredLocks();
 
     // Start from full vehicle list, then apply plate filter if provided
-    var filtered = vehicleBox.values.toList();
+    var filtered = <VehicleModel>[];
 
-    if (input.isNotEmpty) {
+    if (hasPlateInput) {
+      filtered = vehicleBox.values.toList();
       filtered = filtered
           .where((v) => v.plateNumber.toLowerCase().contains(input.toLowerCase()))
           .toList();
@@ -267,7 +271,7 @@ class _TicketViewState extends State<TicketView> {
 
     setState(() {
       plateInput = input;
-      suggestions = filtered;
+      suggestions = hasPlateInput ? filtered : [];
 
       if (plateController.text != input) {
         plateController.text = input;
@@ -278,7 +282,7 @@ class _TicketViewState extends State<TicketView> {
     });
 
     // If input is empty and there is no route selected, reset controller
-    if (input.isEmpty && (selectedDeparture == null || selectedArrival == null)) {
+    if (!hasPlateInput && (selectedDeparture == null || selectedArrival == null)) {
       _resetTicketController();
       _ticketController.selectedVehicle.value = null;
     }
@@ -334,23 +338,25 @@ class _TicketViewState extends State<TicketView> {
 
               // Destination
               IgnorePointer(
-                ignoring: _ticketController.selectedVehicle.value != null,
+                ignoring: plateInput.trim().isNotEmpty,
                 child: DropdownButtonFormField<ArrivalTerminalModel>(
                   value: selectedArrival,
                   isExpanded: true,
                   hint: Text('Select destination'),
-                  onChanged: (val) {
-                    setState(() {
-                      selectedArrival = val;
-                    });
-                    if (val != null) {
-                      _ticketController.locationTo.value = val.name;
-                      _ticketController.arrivalTerminalId.value = val.id;
-                      if (_ticketController.selectedVehicle.value != null) {
-                        _ticketController.calculateCharges(0.0);
-                      }
-                    }
-                  },
+                  onChanged: plateInput.trim().isNotEmpty
+                      ? null
+                      : (val) {
+                          setState(() {
+                            selectedArrival = val;
+                          });
+                          if (val != null) {
+                            _ticketController.locationTo.value = val.name;
+                            _ticketController.arrivalTerminalId.value = val.id;
+                            if (_ticketController.selectedVehicle.value != null) {
+                              _ticketController.calculateCharges(0.0);
+                            }
+                          }
+                        },
                   decoration: InputDecoration(
                     labelText: 'Destination Terminal',
                     prefixIcon: Icon(Icons.location_on),
@@ -1212,165 +1218,187 @@ Call: 8556
           // In your TicketView, modify the print button's onPressed:
 
           ElevatedButton(
-            onPressed: () async {
-              // Validate vehicle has a route
-              if (_ticketController.selectedVehicle.value?.currentRoute ==
-                  null) {
-                _showSnack(
-                  "Error",
-                  "Selected vehicle is not assigned to any route",
-                  backgroundColor: Colors.red,
-                  seconds: 4,
-                );
-                return;
-              }
+            onPressed: _isPrinting
+                ? null
+                : () async {
+                    if (_isPrinting) {
+                      return;
+                    }
 
-              // Try auto-connect if Bluetooth is available but not connected
-              final printerHelper = TicketPrinter();
-              final connected = await printerHelper.ensureConnected();
-              if (!connected) {
-                _showSnack(
-                  "Bluetooth Required",
-                  "No paired Bluetooth thermal printer found. Please pair a printer and try again.",
-                  backgroundColor: Colors.red,
-                  seconds: 5,
-                );
-                return;
-              }
+                    setState(() {
+                      _isPrinting = true;
+                    });
 
-              // Show printing status (optional lightweight)
-              _showSnack(
-                "Printing",
-                "Connected to printer, printing...",
-                backgroundColor: Colors.blue,
-                seconds: 2,
-              );
+                    try {
+                      // Validate vehicle has a route
+                      if (_ticketController.selectedVehicle.value?.currentRoute ==
+                          null) {
+                        _showSnack(
+                          "Error",
+                          "Selected vehicle is not assigned to any route",
+                          backgroundColor: Colors.red,
+                          seconds: 4,
+                        );
+                        return;
+                      }
 
-              try {
-                // Prepare all data first
-                final transactionId = _buildTransactionId();
-                final tripData = _prepareTripData(transactionId);
-                final exitTicketText = _prepareExitTicketText(tripData);
-                final exitQRData = _prepareExitQRData(tripData);
+                      // Try auto-connect if Bluetooth is available but not connected
+                      final printerHelper = TicketPrinter();
+                      final connected = await printerHelper.ensureConnected();
+                      if (!connected) {
+                        _showSnack(
+                          "Bluetooth Required",
+                          "No paired Bluetooth thermal printer found. Please pair a printer and try again.",
+                          backgroundColor: Colors.red,
+                          seconds: 5,
+                        );
+                        return;
+                      }
 
-                final printer = TicketPrinter();
-                final parsedCopies =
-                    int.tryParse(_ticketController.seatNo.value) ?? 1;
-                final copies = parsedCopies > 0 ? parsedCopies : 1;
-                // final copies = 1; // Test mode: print one ticket only
+                      // Show printing status (optional lightweight)
+                      _showSnack(
+                        "Printing",
+                        "Connected to printer, printing...",
+                        backgroundColor: Colors.blue,
+                        seconds: 2,
+                      );
 
-                print('🖨️ Attempting to print $copies copies...');
+                      // Prepare all data first
+                      final transactionId = _buildTransactionId();
+                      final tripData = _prepareTripData(transactionId);
+                      final exitTicketText = _prepareExitTicketText(tripData);
+                      final exitQRData = _prepareExitQRData(tripData);
 
-                final ticketTexts =
-                    List<String>.generate(copies, (index) =>
-                        _prepareTicketTextForSeat(tripData, index + 1));
-                final passengerQRDatas =
-                    List<String>.generate(copies, (index) =>
-                        _preparePassengerQRDataForSeat(tripData, index + 1));
+                      final printer = TicketPrinter();
+                      final parsedCopies =
+                          int.tryParse(_ticketController.seatNo.value) ?? 1;
+                      final copies = parsedCopies > 0 ? parsedCopies : 1;
+                      // final copies = 1; // Test mode: print one ticket only
 
-                final printResult = await printer.connectAndPrintVerified(
-                  texts: ticketTexts,
-                  passengerQRDatas: passengerQRDatas,
-                  copies: copies,
-                  exitText: exitTicketText,
-                  exitQRData: exitQRData,
-                );
+                      print('🖨️ Attempting to print $copies copies...');
 
-                if (printResult.success) {
-                  // Calculate service charge
-                  final now = DateTime.now();
-                  double parseSafe(String value) =>
-                      double.tryParse(value.split(' ').first) ?? 0.0;
+                      final ticketTexts = List<String>.generate(
+                        copies,
+                        (index) => _prepareTicketTextForSeat(tripData, index + 1),
+                      );
+                      final passengerQRDatas = List<String>.generate(
+                        copies,
+                        (index) => _preparePassengerQRDataForSeat(
+                          tripData,
+                          index + 1,
+                        ),
+                      );
 
-                  final int seatCount =
-                      int.tryParse(_ticketController.seatNo.value) ?? 1;
-                  final double totalServiceCharge =
-                      parseSafe(_ticketController.serviceCharge.value) *
-                          seatCount;
+                      final printResult = await printer.connectAndPrintVerified(
+                        texts: ticketTexts,
+                        passengerQRDatas: passengerQRDatas,
+                        copies: copies,
+                        exitText: exitTicketText,
+                        exitQRData: exitQRData,
+                      );
 
-                  print('💾 Saving trip data:');
-                  print('   transactionId: $transactionId');
-                  print('   vehicleId: ${tripData.vehicleId}');
-                  print('   departure: ${tripData.departureName}');
-                  print('   arrival: ${tripData.arrivalName}');
-                  print('   totalPaid: ${tripData.totalPaid}');
-                  print('   trip payload ready for save/post:');
-                  print('   ${tripData.toJson()}');
+                      if (printResult.success) {
+                        // Calculate service charge
+                        final now = DateTime.now();
+                        double parseSafe(String value) =>
+                            double.tryParse(value.split(' ').first) ?? 0.0;
 
-                  final serviceCharge = ServiceChargeModel(
-                    departureTerminal: tripData.departureTerminalId,
-                    dateTime: now,
-                    serviceChargeAmount: totalServiceCharge,
-                    employeeName: homeController.user.value!.fullName,
-                    companyId: tripData.companyId,
-                    employeeId: tripData.employeeId,
-                    transactionId: transactionId,
-                  );
+                        final int seatCount =
+                            int.tryParse(_ticketController.seatNo.value) ?? 1;
+                        final double totalServiceCharge =
+                            parseSafe(_ticketController.serviceCharge.value) *
+                                seatCount;
 
-                  print('💵 Saving service charge data:');
-                  print('   transactionId: ${serviceCharge.transactionId}');
-                  print('   departureTerminal: ${serviceCharge.departureTerminal}');
-                  print('   amount: ${serviceCharge.serviceChargeAmount}');
-                  print('   employeeId: ${serviceCharge.employeeId}');
-                  print('   service charge payload ready for save/post:');
-                  print('   ${serviceCharge.toJson()}');
+                        print('💾 Saving trip data:');
+                        print('   transactionId: $transactionId');
+                        print('   vehicleId: ${tripData.vehicleId}');
+                        print('   departure: ${tripData.departureName}');
+                        print('   arrival: ${tripData.arrivalName}');
+                        print('   totalPaid: ${tripData.totalPaid}');
+                        print('   trip payload ready for save/post:');
+                        print('   ${tripData.toJson()}');
 
-                  final enhancedSyncRepo = Get.find<EnhancedSyncRepository>();
-                  final syncResult = await enhancedSyncRepo.saveDataWithSync(
-                    trip: tripData,
-                    serviceCharge: serviceCharge,
-                  );
+                        final serviceCharge = ServiceChargeModel(
+                          departureTerminal: tripData.departureTerminalId,
+                          dateTime: now,
+                          serviceChargeAmount: totalServiceCharge,
+                          employeeName: homeController.user.value!.fullName,
+                          companyId: tripData.companyId,
+                          employeeId: tripData.employeeId,
+                          transactionId: transactionId,
+                        );
 
-                  await _lockVehicleForPrinting(
-                      _ticketController.selectedVehicle.value!.id);
-                  _resetTicketController();
+                        print('💵 Saving service charge data:');
+                        print('   transactionId: ${serviceCharge.transactionId}');
+                        print('   departureTerminal: ${serviceCharge.departureTerminal}');
+                        print('   amount: ${serviceCharge.serviceChargeAmount}');
+                        print('   employeeId: ${serviceCharge.employeeId}');
+                        print('   service charge payload ready for save/post:');
+                        print('   ${serviceCharge.toJson()}');
 
-                  // User feedback based on sync result
-                  if (syncResult == SyncResult.postedToServer) {
-                    _showSnack(
-                      "Success ✅",
-                      "Ticket posted to server successfully",
-                      backgroundColor: Colors.green,
-                      seconds: 4,
-                    );
-                  } else if (syncResult == SyncResult.savedOffline) {
-                    _showSnack(
-                      "Saved Offline",
-                      "No internet. Ticket saved locally and will sync automatically.",
-                      backgroundColor: Colors.orange,
-                      seconds: 5,
-                    );
-                  } else {
-                    _showSnack(
-                      "Partial Sync",
-                      "Some data synced. Remaining items will sync automatically.",
-                      backgroundColor: Colors.orange,
-                      seconds: 5,
-                    );
-                  }
-                } else {
-                  // Print failed
-                  print('❌ Print failed: ${printResult.error}');
-                  _showSnack(
-                    "Print Failed ❌",
-                    printResult.error ?? "Failed to print ticket.",
-                    backgroundColor: Colors.red,
-                    seconds: 5,
-                  );
-                }
-              } catch (e, stackTrace) {
-                print('❌ Unexpected error during printing:');
-                print('Error: $e');
-                print('Stack trace: $stackTrace');
+                        final enhancedSyncRepo = Get.find<EnhancedSyncRepository>();
+                        final syncResult = await enhancedSyncRepo.saveDataWithSync(
+                          trip: tripData,
+                          serviceCharge: serviceCharge,
+                        );
 
-                _showSnack(
-                  "Error ❌",
-                  "An unexpected error occurred. Check logs for details.",
-                  backgroundColor: Colors.red,
-                  seconds: 5,
-                );
-              }
-            },
+                        await _lockVehicleForPrinting(
+                          _ticketController.selectedVehicle.value!.id,
+                        );
+                        _resetTicketController();
+
+                        // User feedback based on sync result
+                        if (syncResult == SyncResult.postedToServer) {
+                          _showSnack(
+                            "Success ✅",
+                            "Ticket posted to server successfully",
+                            backgroundColor: Colors.green,
+                            seconds: 4,
+                          );
+                        } else if (syncResult == SyncResult.savedOffline) {
+                          _showSnack(
+                            "Saved Offline",
+                            "No internet. Ticket saved locally and will sync automatically.",
+                            backgroundColor: Colors.orange,
+                            seconds: 5,
+                          );
+                        } else {
+                          _showSnack(
+                            "Partial Sync",
+                            "Some data synced. Remaining items will sync automatically.",
+                            backgroundColor: Colors.orange,
+                            seconds: 5,
+                          );
+                        }
+                      } else {
+                        // Print failed
+                        print('❌ Print failed: ${printResult.error}');
+                        _showSnack(
+                          "Print Failed ❌",
+                          printResult.error ?? "Failed to print ticket.",
+                          backgroundColor: Colors.red,
+                          seconds: 5,
+                        );
+                      }
+                    } catch (e, stackTrace) {
+                      print('❌ Unexpected error during printing:');
+                      print('Error: $e');
+                      print('Stack trace: $stackTrace');
+
+                      _showSnack(
+                        "Error ❌",
+                        "An unexpected error occurred. Check logs for details.",
+                        backgroundColor: Colors.red,
+                        seconds: 5,
+                      );
+                    } finally {
+                      if (mounted) {
+                        setState(() {
+                          _isPrinting = false;
+                        });
+                      }
+                    }
+                  },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),

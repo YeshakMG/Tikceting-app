@@ -11,6 +11,7 @@ import 'package:oro_ticket_app/data/locals/service/user_storage_service.dart';
 import 'package:oro_ticket_app/data/locals/service/token_storage_service.dart';
 import 'package:oro_ticket_app/data/repositories/sync_repository.dart';
 import 'package:oro_ticket_app/data/locals/service/backup_service.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../../../../data/locals/hive_boxes.dart';
 import '../../../../data/locals/models/service_charge_model.dart';
 import '../../../../data/locals/models/user_model.dart';
@@ -25,7 +26,7 @@ class AuthService {
 
   AuthService() {
     // Initialize cleanup timer for rate limits (runs every hour)
-    Timer.periodic(const Duration(microseconds: 1000), (_) async => await SecurityUtils.cleanupRateLimits());
+    Timer.periodic(const Duration(hours: 1), (_) async => await SecurityUtils.cleanupRateLimits());
   }
 
   // Initialize secure client
@@ -74,14 +75,23 @@ class AuthService {
 
     try {
       final url = Uri.parse('$baseUrl/auth/company-user/login');
+      final packageInfo = await PackageInfo.fromPlatform();
+      final appVersion = packageInfo.version;
+      final payload = {
+        'email': email,
+        'password': password,
+        'appVersion': appVersion,
+      };
       print('🌐 API Request: POST $url');
-      print('📤 Request Body: ${jsonEncode({'email': email, 'password': '***'})}');
+      print(
+        '📤 Request Body: ${jsonEncode({'email': email, 'password': '***', 'appVersion': appVersion})}',
+      );
 
       final response = await _secureClient
           .post(
             url,
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'email': email, 'password': password}),
+            body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 10));
 

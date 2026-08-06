@@ -24,6 +24,7 @@ class VehiclesController extends GetxController {
   RxInt currentPage = 1.obs;
   RxBool hasMore = true.obs;
   RxBool isPageLoading = false.obs;
+  bool _isInitialLoadRunning = false;
 
   @override
   void onInit() {
@@ -71,7 +72,10 @@ class VehiclesController extends GetxController {
   }
 
   Future<void> loadInitialVehicles() async {
+    if (_isInitialLoadRunning) return;
+
     try {
+      _isInitialLoadRunning = true;
       isLoading(true);
       errorMessage('');
 
@@ -90,11 +94,12 @@ class VehiclesController extends GetxController {
       }
     } finally {
       isLoading(false);
+      _isInitialLoadRunning = false;
     }
   }
 
   Future<void> loadLocalVehicles() async {
-    final vehicles = await syncRepo.getVehicles();
+    final vehicles = syncRepo.getLocalVehicles();
     allVehicles.assignAll(vehicles);
     filteredVehicles.assignAll(vehicles);
     currentPage(1);

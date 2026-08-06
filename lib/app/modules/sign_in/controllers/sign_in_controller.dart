@@ -5,7 +5,6 @@ import 'package:get/get.dart';
 import 'package:oro_ticket_app/core/constants/colors.dart';
 
 import '../../home/controllers/home_controller.dart';
-import '../../../../data/locals/models/user_model.dart';
 import '../services/auth_service.dart';
 
 class SignInController extends GetxController {
@@ -28,7 +27,7 @@ class SignInController extends GetxController {
     clearFields();
 
     ever(loginError, (error) {
-      if (error is String && error.isNotEmpty) {
+      if (error.isNotEmpty) {
         Get.snackbar(
           'Login Error',
           error,
@@ -71,7 +70,6 @@ class SignInController extends GetxController {
       if (result['success'] == true) {
         final homeController = Get.find<HomeController>();
         homeController.loadUser();
-        await _authService.fetchAndStoreProfileData();
 
         // Show success message before navigation
         Get.snackbar(

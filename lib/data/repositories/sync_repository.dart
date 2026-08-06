@@ -32,6 +32,12 @@ class SyncRepository {
   final Connectivity _connectivity = Connectivity();
   final _vehicleChanges = StreamController<void>.broadcast();
   Stream<void> get vehicleChanges => _vehicleChanges.stream;
+  bool _isVehicleSyncInProgress = false;
+  DateTime? _lastVehicleSyncAt;
+  DateTime? _lastVehicleBackupAt;
+  static const Duration _vehicleSyncCooldown = Duration(seconds: 20);
+  static const Duration _vehicleBackupCooldown = Duration(minutes: 10);
+  static const bool _verboseVehicleLogs = false;
 
   // Use secure HTTP client for all network requests
   late final http.Client _secureClient;
@@ -124,6 +130,21 @@ class SyncRepository {
   }
 
   Future<void> syncAllCompanyUserVehicles({bool forceSync = false}) async {
+    if (_isVehicleSyncInProgress) {
+      print('⏳ Vehicle sync already in progress; skipping duplicate request');
+      return;
+    }
+
+    if (!forceSync && _lastVehicleSyncAt != null) {
+      final elapsed = DateTime.now().difference(_lastVehicleSyncAt!);
+      if (elapsed < _vehicleSyncCooldown) {
+        print('⏭️ Vehicle sync skipped (cooldown ${elapsed.inSeconds}s)');
+        return;
+      }
+    }
+
+    _isVehicleSyncInProgress = true;
+
     // Initialize secure client if not already done
     if (!_secureClientInitialized) {
       await _initSecureClient();
@@ -153,7 +174,9 @@ class SyncRepository {
         print('🔄 Fetching vehicles page $currentPage...');
         final requestUrl =
             '$baseUrl/tms-api/vehicles/test?page=$currentPage&limit=50';
-        print('🌐 Vehicle API Request URL: $requestUrl');
+        if (_verboseVehicleLogs) {
+          print('🌐 Vehicle API Request URL: $requestUrl');
+        }
 
         final response = await _secureClient.get(
           Uri.parse(requestUrl),
@@ -164,8 +187,10 @@ class SyncRepository {
         ).timeout(const Duration(seconds: 30));
 
         print('📥 Vehicle API Status: ${response.statusCode}');
-        print('📋 Vehicle API Headers: ${response.headers}');
-        _logResponsePreview(response.body);
+        if (_verboseVehicleLogs) {
+          print('📋 Vehicle API Headers: ${response.headers}');
+          _logResponsePreview(response.body);
+        }
 
         if (response.statusCode == 200) {
           final json = jsonDecode(response.body);
@@ -176,15 +201,19 @@ class SyncRepository {
           // ✅ CORRECTED: pagination is at root level, not inside data
           final pagination = json['pagination'];
 
-          print('📊 Pagination info: $pagination');
+          if (_verboseVehicleLogs) {
+            print('📊 Pagination info: $pagination');
+          }
 
           final validVehicles = vehicles
               .where((e) => e['deleted_at'] == null)
               .map((e) => VehicleModel.fromJson(e))
               .toList();
 
-          for (var i = 0; i < validVehicles.length; i++) {
-            _logVehicleDetails(validVehicles[i], index: i + 1, page: currentPage);
+          if (_verboseVehicleLogs) {
+            for (var i = 0; i < validVehicles.length; i++) {
+              _logVehicleDetails(validVehicles[i], index: i + 1, page: currentPage);
+            }
           }
 
           // Save vehicles
@@ -261,12 +290,25 @@ class SyncRepository {
         print(
             '✅ Successfully synced $totalSynced vehicles across ${currentPage} pages');
 
-        // Backup the latest vehicles (and other data) after successful sync
-        await BackupService.backupData();
+        final now = DateTime.now();
+        final shouldBackup = _lastVehicleBackupAt == null ||
+            now.difference(_lastVehicleBackupAt!) >= _vehicleBackupCooldown;
+        if (shouldBackup) {
+          await BackupService.backupData();
+          _lastVehicleBackupAt = now;
+        } else {
+          final remaining = _vehicleBackupCooldown -
+              now.difference(_lastVehicleBackupAt!);
+          print('⏭️ Skipped vehicle backup (cooldown ${remaining.inMinutes}m left)');
+        }
       }
+
+      _lastVehicleSyncAt = DateTime.now();
     } catch (e, stackTrace) {
       print('❌ Sync error: $e');
       print('Stack trace: $stackTrace');
+    } finally {
+      _isVehicleSyncInProgress = false;
     }
   }
 

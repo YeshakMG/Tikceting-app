@@ -48,6 +48,7 @@ class _TicketViewState extends State<TicketView> {
   String plateInput = '';
   List<VehicleModel> suggestions = [];
   final plateController = TextEditingController();
+  bool _terminalReadinessWarningShown = false;
 
   @override
   void initState() {
@@ -126,6 +127,19 @@ class _TicketViewState extends State<TicketView> {
     });
   }
 
+  bool get _hasStoredDepartureTerminals {
+    final box = Hive.box<DepartureTerminalModel>('departureTerminalsBox');
+    return box.isNotEmpty;
+  }
+
+  bool get _hasStoredArrivalTerminals => arrivalTerminals.isNotEmpty;
+
+  bool get _areTerminalsReadyForVehicleSelection {
+    return _hasStoredDepartureTerminals &&
+        _hasStoredArrivalTerminals &&
+        _ticketController.departureTerminalId.value.trim().isNotEmpty;
+  }
+
   void _loadDefaultDeparture() {
     _setLoginDepartureTerminal();
   }
@@ -158,9 +172,60 @@ class _TicketViewState extends State<TicketView> {
             : selectedDeparture ?? '')
         .trim();
 
-    return (terminalId.isNotEmpty && loginDepartureId.isNotEmpty && terminalId == loginDepartureId) ||
-        (terminalName.isNotEmpty && loginDepartureName.isNotEmpty &&
+    return (terminalId.isNotEmpty &&
+            loginDepartureId.isNotEmpty &&
+            terminalId == loginDepartureId) ||
+        (terminalName.isNotEmpty &&
+            loginDepartureName.isNotEmpty &&
             terminalName.toLowerCase() == loginDepartureName.toLowerCase());
+  }
+
+  bool _matchesFetchedArrivalTerminalForVehicle(VehicleModel vehicle) {
+    final route = vehicle.currentRoute?.terminalDestination;
+    if (route == null) return false;
+
+    final routeDepartureName =
+        route.departureTerminalName?.trim().isNotEmpty == true
+            ? route.departureTerminalName!.trim()
+            : '';
+    final routeArrivalName =
+        route.arrivalTerminalName?.trim().isNotEmpty == true
+            ? route.arrivalTerminalName!.trim()
+            : '';
+
+    final arrivalMatchesLogin = _matchesLoginDepartureTerminal(
+      terminalId: route.arrivalTerminalId,
+      terminalName: routeArrivalName,
+    );
+
+    final departureMatchesLogin = _matchesLoginDepartureTerminal(
+      terminalId: route.departureTerminalId,
+      terminalName: routeDepartureName,
+    );
+
+    final isReversed = arrivalMatchesLogin && !departureMatchesLogin;
+
+    final expectedArrivalId = isReversed
+        ? route.departureTerminalId.trim()
+        : route.arrivalTerminalId.trim();
+
+    final expectedArrivalName =
+        (isReversed ? routeDepartureName : routeArrivalName).trim();
+
+    if (expectedArrivalId.isNotEmpty &&
+        arrivalTerminals.any((terminal) => terminal.id == expectedArrivalId)) {
+      return true;
+    }
+
+    if (expectedArrivalName.isNotEmpty &&
+        arrivalTerminals.any(
+          (terminal) =>
+              terminal.name.toLowerCase() == expectedArrivalName.toLowerCase(),
+        )) {
+      return true;
+    }
+
+    return false;
   }
 
   Future<void> _syncTariffsIfNeeded() async {
@@ -177,6 +242,26 @@ class _TicketViewState extends State<TicketView> {
   }
 
   void _onPlateInputChanged(String input) {
+    if (!_areTerminalsReadyForVehicleSelection) {
+      setState(() {
+        plateInput = input;
+        suggestions = [];
+      });
+
+      if (input.trim().isNotEmpty && !_terminalReadinessWarningShown) {
+        _terminalReadinessWarningShown = true;
+        _showSnack(
+          'Terminal Data Required',
+          'Fetch and store both departure and arrival terminals before selecting vehicles.',
+          backgroundColor: Colors.orange,
+          seconds: 4,
+        );
+      }
+      return;
+    }
+
+    _terminalReadinessWarningShown = false;
+
     final vehicleBox = Hive.box<VehicleModel>('vehiclesBox');
     final lockBox = Hive.box<VehiclePrintLock>('vehiclePrintLocksBox');
     final now = DateTime.now();
@@ -192,7 +277,8 @@ class _TicketViewState extends State<TicketView> {
 
       if (normalizedInput.isEmpty) return false;
 
-      return vehicle.plateNumber.toLowerCase().contains(normalizedInput);
+      return vehicle.plateNumber.toLowerCase().contains(normalizedInput) &&
+          _matchesFetchedArrivalTerminalForVehicle(vehicle);
     }).toList();
 
     setState(() {
@@ -200,7 +286,8 @@ class _TicketViewState extends State<TicketView> {
       suggestions = candidates;
       if (plateController.text != input) {
         plateController.text = input;
-        plateController.selection = TextSelection.fromPosition(TextPosition(offset: input.length));
+        plateController.selection =
+            TextSelection.fromPosition(TextPosition(offset: input.length));
       }
     });
 
@@ -213,7 +300,8 @@ class _TicketViewState extends State<TicketView> {
     }
 
     // If input is empty and there is no route selected, reset controller
-    if (input.isEmpty && (selectedDeparture == null || selectedArrival == null)) {
+    if (input.isEmpty &&
+        (selectedDeparture == null || selectedArrival == null)) {
       _resetTicketController();
       _ticketController.selectedVehicle.value = null;
       _setLoginDepartureTerminal();
@@ -226,7 +314,8 @@ class _TicketViewState extends State<TicketView> {
     print('   Vehicle ID: ${vehicle.id}');
     print('📦 Full selected vehicle payload:');
     try {
-      final prettyVehicle = const JsonEncoder.withIndent('  ').convert(vehicle.toJson());
+      final prettyVehicle =
+          const JsonEncoder.withIndent('  ').convert(vehicle.toJson());
       print(prettyVehicle);
     } catch (e) {
       print('⚠️ Failed to pretty print vehicle payload: $e');
@@ -252,12 +341,14 @@ class _TicketViewState extends State<TicketView> {
       final loginDepartureName = selectedDeparture ?? _departureController.text;
       final loginDepartureId = _ticketController.departureTerminalId.value;
 
-      final routeDepartureName = route.departureTerminalName?.trim().isNotEmpty == true
-          ? route.departureTerminalName!.trim()
-          : '';
-      final routeArrivalName = route.arrivalTerminalName?.trim().isNotEmpty == true
-          ? route.arrivalTerminalName!.trim()
-          : '';
+      final routeDepartureName =
+          route.departureTerminalName?.trim().isNotEmpty == true
+              ? route.departureTerminalName!.trim()
+              : '';
+      final routeArrivalName =
+          route.arrivalTerminalName?.trim().isNotEmpty == true
+              ? route.arrivalTerminalName!.trim()
+              : '';
 
       final arrivalMatchesLogin = _matchesLoginDepartureTerminal(
         terminalId: route.arrivalTerminalId,
@@ -273,17 +364,26 @@ class _TicketViewState extends State<TicketView> {
 
       print('🧭 Route resolution for selected vehicle');
       print('   Login departure: $loginDepartureName (ID: $loginDepartureId)');
-      print('   API route departure: $routeDepartureName (ID: ${route.departureTerminalId})');
-      print('   API route arrival: $routeArrivalName (ID: ${route.arrivalTerminalId})');
+      print(
+          '   API route departure: $routeDepartureName (ID: ${route.departureTerminalId})');
+      print(
+          '   API route arrival: $routeArrivalName (ID: ${route.arrivalTerminalId})');
       print('   Reversed route detected: $isReversed');
 
       final correctedArrivalName = isReversed
-          ? (routeDepartureName.isNotEmpty ? routeDepartureName : vehicle.currentRoute?.terminalDestination?.departureTerminalName ?? '')
-          : (routeArrivalName.isNotEmpty ? routeArrivalName : vehicle.currentRoute?.terminalDestination?.arrivalTerminalName ?? '');
+          ? (routeDepartureName.isNotEmpty
+              ? routeDepartureName
+              : vehicle.currentRoute?.terminalDestination
+                      ?.departureTerminalName ??
+                  '')
+          : (routeArrivalName.isNotEmpty
+              ? routeArrivalName
+              : vehicle
+                      .currentRoute?.terminalDestination?.arrivalTerminalName ??
+                  '');
 
-      final correctedArrivalId = isReversed
-          ? route.departureTerminalId
-          : route.arrivalTerminalId;
+      final correctedArrivalId =
+          isReversed ? route.departureTerminalId : route.arrivalTerminalId;
 
       _setLoginDepartureTerminal();
 
@@ -332,8 +432,10 @@ class _TicketViewState extends State<TicketView> {
       _ticketController.km.value = '${route.distance.toStringAsFixed(1)} km';
 
       print('✅ Ticket data populated from selected plate');
-      print('   Departure: ${_ticketController.locationFrom.value} (ID: ${_ticketController.departureTerminalId.value})');
-      print('   Arrival: ${_ticketController.locationTo.value} (ID: ${_ticketController.arrivalTerminalId.value})');
+      print(
+          '   Departure: ${_ticketController.locationFrom.value} (ID: ${_ticketController.departureTerminalId.value})');
+      print(
+          '   Arrival: ${_ticketController.locationTo.value} (ID: ${_ticketController.arrivalTerminalId.value})');
       print('   Distance: ${_ticketController.km.value}');
       print('   Fleet: ${_ticketController.fleetType.value}');
       print('   Level: ${_ticketController.level.value}');
@@ -487,7 +589,8 @@ class _TicketViewState extends State<TicketView> {
                       const SizedBox(height: 4),
                       Text(
                         'Type a plate number, then select from the suggestions.',
-                        style: AppTextStyles.caption.copyWith(color: Colors.grey),
+                        style:
+                            AppTextStyles.caption.copyWith(color: Colors.grey),
                       ),
                       const SizedBox(height: 12),
                       _buildReadonlyRouteField(
@@ -508,18 +611,23 @@ class _TicketViewState extends State<TicketView> {
                       const SizedBox(height: 8),
                       TextFormField(
                         controller: plateController,
-                        readOnly: _ticketController.selectedVehicle.value != null,
+                        readOnly: !_areTerminalsReadyForVehicleSelection ||
+                            _ticketController.selectedVehicle.value != null,
                         decoration: InputDecoration(
                           labelText: 'Plate Number',
+                          helperText: _areTerminalsReadyForVehicleSelection
+                              ? null
+                              : 'Vehicle selection unlocks after departure and arrival terminals are fetched.',
                           isDense: true,
                           prefixIcon: Icon(Icons.directions_bus),
-                          suffixIcon: _ticketController.selectedVehicle.value != null
-                              ? IconButton(
-                                  tooltip: 'Clear vehicle selection',
-                                  icon: const Icon(Icons.clear),
-                                  onPressed: _clearVehicleSelection,
-                                )
-                              : null,
+                          suffixIcon:
+                              _ticketController.selectedVehicle.value != null
+                                  ? IconButton(
+                                      tooltip: 'Clear vehicle selection',
+                                      icon: const Icon(Icons.clear),
+                                      onPressed: _clearVehicleSelection,
+                                    )
+                                  : null,
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -538,14 +646,17 @@ class _TicketViewState extends State<TicketView> {
                           child: ListView.separated(
                             controller: _scrollController,
                             itemCount: suggestions.length,
-                            separatorBuilder: (_, __) => Divider(height: 1, color: Colors.grey.shade200),
+                            separatorBuilder: (_, __) =>
+                                Divider(height: 1, color: Colors.grey.shade200),
                             itemBuilder: (context, index) {
                               final vehicle = suggestions[index];
                               return ListTile(
                                 dense: true,
-                                leading: const Icon(Icons.directions_bus, size: 20),
+                                leading:
+                                    const Icon(Icons.directions_bus, size: 20),
                                 title: Text(vehicle.plateNumber),
-                                subtitle: Text('${vehicle.plateRegion} • ${vehicle.fleetType}'),
+                                subtitle: Text(
+                                    '${vehicle.plateRegion} • ${vehicle.fleetType}'),
                                 onTap: () => _applyVehicleSelection(vehicle),
                               );
                             },
@@ -644,7 +755,8 @@ class _TicketViewState extends State<TicketView> {
             child: ElevatedButton(
               onPressed: () async {
                 // Validate vehicle has a route
-                if (_ticketController.selectedVehicle.value?.currentRoute == null) {
+                if (_ticketController.selectedVehicle.value?.currentRoute ==
+                    null) {
                   _showSnack(
                     "Error",
                     "Selected vehicle is not assigned to any route",
@@ -708,9 +820,11 @@ class _TicketViewState extends State<TicketView> {
                     double parseSafe(String value) =>
                         double.tryParse(value.split(' ').first) ?? 0.0;
 
-                    final int seatCount = int.tryParse(_ticketController.seatNo.value) ?? 1;
+                    final int seatCount =
+                        int.tryParse(_ticketController.seatNo.value) ?? 1;
                     final double totalServiceCharge =
-                        parseSafe(_ticketController.serviceCharge.value) * seatCount;
+                        parseSafe(_ticketController.serviceCharge.value) *
+                            seatCount;
 
                     print('💾 Saving trip data:');
                     print('   transactionId: $transactionId');
@@ -733,7 +847,8 @@ class _TicketViewState extends State<TicketView> {
 
                     print('💵 Saving service charge data:');
                     print('   transactionId: ${serviceCharge.transactionId}');
-                    print('   departureTerminal: ${serviceCharge.departureTerminal}');
+                    print(
+                        '   departureTerminal: ${serviceCharge.departureTerminal}');
                     print('   amount: ${serviceCharge.serviceChargeAmount}');
                     print('   employeeId: ${serviceCharge.employeeId}');
                     print('   service charge payload ready for save/post:');
@@ -745,7 +860,8 @@ class _TicketViewState extends State<TicketView> {
                       serviceCharge: serviceCharge,
                     );
 
-                    await _lockVehicleForPrinting(_ticketController.selectedVehicle.value!.id);
+                    await _lockVehicleForPrinting(
+                        _ticketController.selectedVehicle.value!.id);
                     _resetTicketController();
 
                     // User feedback based on sync result
@@ -796,7 +912,8 @@ class _TicketViewState extends State<TicketView> {
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
               ),
@@ -927,7 +1044,6 @@ Call: 8556
       timestamp: trip.dateAndTime,
     );
   }
-
 }
 
 String formatTicketText({
